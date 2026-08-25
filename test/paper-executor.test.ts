@@ -52,6 +52,26 @@ test("paper executor fills a resting quote only after the book crosses it", asyn
     await executor.reconcile(market, [quote], crossed);
     assert.equal(executor.positions.byToken.get("a"), 5);
     assert.equal(executor.positions.cash, -2);
+    const quoteAgain = { tokenId: "b", outcome: "B", side: "BUY" as const, price: 0.4, size: 5 };
+    await executor.reconcile(
+      market,
+      [quoteAgain],
+      new Map([
+        [
+          "b",
+          {
+            tokenId: "b",
+            bids: [{ price: 0.35, size: 5 }],
+            asks: [{ price: 0.45, size: 5 }],
+            receivedAt: 3,
+          },
+        ],
+      ]),
+    );
+    const resting = executor.listRestingOrders();
+    assert.equal(resting.length, 1);
+    await executor.cancelOrders([resting[0]?.id ?? ""], "test");
+    assert.equal(executor.listRestingOrders().length, 0);
     await executor.cancelAll("test");
     assert.equal(executor.getOpenQuotes().length, 0);
   } finally {

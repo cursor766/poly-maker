@@ -39,6 +39,12 @@ import {
   readRuntimeLimits,
 } from "./web/runtime-overrides.js";
 import { type MakerRuntimeStatus, StatusReporter } from "./web/status-reporter.js";
+import {
+  consumeDeskCommands,
+  DESK_COMMANDS_PATH,
+  skipExistingDeskCommands,
+  type DeskCommand,
+} from "./web/desk-commands.js";
 
 interface MarketRuntime {
   mapping: MarketMapping;
@@ -47,6 +53,8 @@ interface MarketRuntime {
   risk: RiskEngine;
   lockEpoch: number;
   requiresSourceReopen: boolean;
+  operatorPaused: boolean;
+  lastBooks: ReadonlyMap<string, TokenBook> | undefined;
   protection: Promise<void> | undefined;
 }
 
@@ -194,6 +202,7 @@ export class MakerApp {
       "maker application started",
     );
     this.statusReporter.start();
+    await skipExistingDeskCommands();
     this.startConfigWatchers();
   }
 
@@ -281,6 +290,8 @@ export class MakerApp {
       risk: new RiskEngine(this.runtimeLimits),
       lockEpoch: Date.now(),
       requiresSourceReopen: false,
+      operatorPaused: false,
+      lastBooks: undefined,
       protection: undefined,
     };
   }
@@ -357,6 +368,12 @@ export class MakerApp {
         reload: async () => {
           Object.assign(this.runtimeLimits, await readRuntimeLimits(limitsFromConfig(this.config)));
           await this.audit.write("runtime_limits_hot_reloaded", this.runtimeLimits);
+        },
+      },
+      {
+        path: resolve(DESK_COMMANDS_PATH),
+        reload: async () => {
+          await consumeDeskCommands((command) => this.applyDeskCommand(command));
         },
       },
     ];
@@ -532,6 +549,7 @@ export class MakerApp {
     let books: ReadonlyMap<string, TokenBook>;
     try {
       books = await this.orderBooks.fetchBooks(runtime.market);
+      runtime.lastBooks = books;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.warn({ error: message, slug: runtime.market.slug }, "order book fetch failed");
@@ -639,6 +657,7 @@ export class MakerApp {
   ): boolean {
     const state = this.sourceStates.get(runtime.mapping.sourceMarketId);
     if (
+      runtime.operatorPaused ||
       !this.mqttConnected ||
       !this.polymarketConnected ||
       runtime.protection !== undefined ||
@@ -659,6 +678,49 @@ export class MakerApp {
     return runtime.market.tokenIds.every((tokenId) => {
       const book = books.get(tokenId);
       return book !== undefined && now - book.receivedAt <= this.runtimeLimits.oddsStaleMs;
+    });
+  }
+
+  private async applyDeskCommand(command: DeskCommand): Promise<void> {
+    const runtime = this.runtimes.find(
+      (item) => item.mapping.sourceMarketId === command.sourceMarketId,
+    );
+    if (!runtime) {
+      this.logger.warn({ command }, "desk command ignored; market not active");
+      return;
+    }
+    if (command.action === "pause") {
+      runtime.operatorPaused = true;
+      await this.protectRuntime(runtime, "operator-paused");
+      await this.audit.write("operator_pause", {
+        sourceMarketId: command.sourceMarketId,
+        commandId: command.id,
+      });
+      return;
+    }
+    if (command.action === "resume") {
+      runtime.operatorPaused = false;
+      if (this.lockReasons.get(command.sourceMarketId) === "operator-paused") {
+        this.lockReasons.delete(command.sourceMarketId);
+      }
+      const fair = this.latestFair.get(command.sourceMarketId);
+      if (fair && runtime.lastBooks && this.canUnlock(runtime, fair, runtime.lastBooks)) {
+        runtime.executor.unlock();
+        runtime.requiresSourceReopen = false;
+        this.tui?.recordExecutionState(runtime.mapping.round ?? 0, false);
+      }
+      await this.audit.write("operator_resume", {
+        sourceMarketId: command.sourceMarketId,
+        commandId: command.id,
+        locked: runtime.executor.locked,
+      });
+      return;
+    }
+    await runtime.executor.cancelOrders(command.orderIds ?? [], "operator-cancel");
+    await this.audit.write("operator_cancel", {
+      sourceMarketId: command.sourceMarketId,
+      commandId: command.id,
+      orderIds: command.orderIds ?? [],
     });
   }
 
@@ -735,7 +797,11 @@ export class MakerApp {
           round: runtime.mapping.round ?? 0,
           polymarketSlug: runtime.mapping.polymarketSlug,
           sourceMarketId: runtime.mapping.sourceMarketId,
+          conditionId: runtime.market.conditionId,
+          outcomes: runtime.market.outcomes,
+          tokenIds: runtime.market.tokenIds,
           locked: runtime.executor.locked,
+          operatorPaused: runtime.operatorPaused,
           ...(reason ? { reason } : {}),
           ...(rejectDetail ? { rejectDetail } : {}),
           sourceOpen: state ? state.open && state.visible && !state.suspended : null,
@@ -747,6 +813,25 @@ export class MakerApp {
             ]),
           ),
           plannedQuotes: this.plannedQuotes.get(runtime.mapping.sourceMarketId) ?? [],
+          openOrders: runtime.executor.listRestingOrders().map((order) => ({
+            ...order,
+            outcome:
+              runtime.market.outcomes[runtime.market.tokenIds.indexOf(order.tokenId)] ?? order.tokenId,
+          })),
+          books: Object.fromEntries(
+            runtime.market.outcomes.map((outcome, index) => {
+              const tokenId = runtime.market.tokenIds[index] ?? "";
+              const book = runtime.lastBooks?.get(tokenId);
+              return [
+                outcome,
+                {
+                  bids: book?.bids.slice(0, 8) ?? [],
+                  asks: book?.asks.slice(0, 8) ?? [],
+                  receivedAt: book?.receivedAt ?? 0,
+                },
+              ];
+            }),
+          ),
           openOrderCount: runtime.executor.openOrderCount,
           openOrderNotional: runtime.executor.openOrderNotional,
           notionalUsed: marketPositionNotional + runtime.executor.openOrderNotional,

@@ -32,12 +32,32 @@ export interface MarketPreview {
   markets: PreviewMarket[];
 }
 
+export interface RestingOrder {
+  id: string;
+  tokenId: string;
+  outcome: string;
+  side: "BUY" | "SELL";
+  price: number;
+  size: number;
+  matchedSize: number;
+}
+
+export interface BookSide {
+  bids: Array<{ price: number; size: number }>;
+  asks: Array<{ price: number; size: number }>;
+  receivedAt: number;
+}
+
 export interface RuntimeMarket {
   name: string;
   round: number;
   polymarketSlug: string;
   sourceMarketId: string;
+  conditionId: string;
+  outcomes: [string, string];
+  tokenIds: [string, string];
   locked: boolean;
+  operatorPaused: boolean;
   reason?: string;
   rejectDetail?: string;
   sourceOpen: boolean | null;
@@ -50,6 +70,8 @@ export interface RuntimeMarket {
     price: number;
     size: number;
   }>;
+  openOrders: RestingOrder[];
+  books: Record<string, BookSide>;
   openOrderCount: number;
   openOrderNotional: number;
   notionalUsed: number;
@@ -156,6 +178,43 @@ export interface SavedMatch {
 export interface MarketsResponse {
   mappings: MarketMapping[];
   savedMatches: SavedMatch[];
+}
+
+export interface DeskTrade {
+  id: string;
+  at: number;
+  side: "BUY" | "SELL";
+  outcome: string;
+  price: number;
+  size: number;
+  notional: number;
+  name: string;
+  wallet: string;
+}
+
+export interface DeskHolder {
+  outcome: string;
+  name: string;
+  wallet: string;
+  amount: number;
+  share: number;
+}
+
+export interface DeskHolderGroup {
+  tokenId: string;
+  outcome: string;
+  holders: DeskHolder[];
+}
+
+export interface DeskMarketSnapshot {
+  conditionId: string;
+  trades: DeskTrade[];
+  holders: DeskHolderGroup[];
+  error?: string;
+}
+
+export interface DeskSnapshot {
+  markets: Record<string, DeskMarketSnapshot>;
 }
 
 export const controlApiUrl = process.env.NEXT_PUBLIC_CONTROL_API ?? "http://127.0.0.1:48787";

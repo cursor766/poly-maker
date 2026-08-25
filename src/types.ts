@@ -122,6 +122,15 @@ export interface ManagedOrder {
   matchedSize: number;
 }
 
+export interface RestingOrder {
+  id: string;
+  tokenId: string;
+  side: "BUY" | "SELL";
+  price: number;
+  size: number;
+  matchedSize: number;
+}
+
 export interface PositionState {
   byToken: Map<string, number>;
   cash: number;

@@ -5,6 +5,7 @@ import type {
   PositionState,
   Quote,
   ResolvedMarket,
+  RestingOrder,
   TokenBook,
   TradingMode,
 } from "../types.js";
@@ -56,6 +57,7 @@ export class LiveExecutor implements QuoteExecutor {
   locked = true;
   openOrderCount = 0;
   openOrderNotional = 0;
+  private lastOrders: ManagedOrder[] = [];
 
   constructor(
     private readonly gateway: TradingGateway,
@@ -70,6 +72,7 @@ export class LiveExecutor implements QuoteExecutor {
   async initialize(): Promise<void> {
     await this.enqueue(async () => {
       const orphanOrders = await this.gateway.listOpenOrders(this.options.conditionId);
+      this.lastOrders = orphanOrders;
       this.openOrderCount = orphanOrders.length;
       this.openOrderNotional = orphanOrders.reduce(
         (sum, order) => sum + order.price * Math.max(0, order.size - order.matchedSize),
@@ -99,6 +102,7 @@ export class LiveExecutor implements QuoteExecutor {
       if (this.locked) return;
       const safeQuotes = await this.validateQuotes(quotes);
       const remote = await this.gateway.listOpenOrders(this.options.conditionId);
+      this.lastOrders = remote;
       const retainedDesired = new Set<number>();
       const cancel: ManagedOrder[] = [];
 
@@ -170,14 +174,19 @@ export class LiveExecutor implements QuoteExecutor {
       if (unmatchedCancel.length > 0) {
         await this.cancelRemote(unmatchedCancel, "quote-removal");
       }
-      this.openOrderCount = retainedDesired.size + place.length;
-      this.openOrderNotional = safeQuotes.reduce((sum, quote) => sum + quote.price * quote.size, 0);
+      this.lastOrders = await this.gateway.listOpenOrders(this.options.conditionId);
+      this.openOrderCount = this.lastOrders.length;
+      this.openOrderNotional = this.lastOrders.reduce(
+        (sum, order) => sum + order.price * Math.max(0, order.size - order.matchedSize),
+        0,
+      );
     });
   }
 
   async cancelAll(reason: string): Promise<void> {
     await this.enqueue(async () => {
       const open = await this.gateway.listOpenOrders(this.options.conditionId);
+      this.lastOrders = open;
       await this.audit.write("live_cancel_plan", {
         mode: this.options.mode,
         reason,
@@ -190,8 +199,41 @@ export class LiveExecutor implements QuoteExecutor {
       if (this.options.mode === "live") {
         this.openOrderCount = 0;
         this.openOrderNotional = 0;
+        this.lastOrders = [];
       }
     });
+  }
+
+  async cancelOrders(orderIds: readonly string[], reason: string): Promise<void> {
+    if (orderIds.length === 0) {
+      await this.cancelAll(reason);
+      return;
+    }
+    await this.enqueue(async () => {
+      const open = await this.gateway.listOpenOrders(this.options.conditionId);
+      const targets = open.filter((order) => orderIds.includes(order.id));
+      this.lastOrders = open;
+      if (this.options.mode === "live" && targets.length > 0) {
+        await this.cancelRemote(targets, reason);
+        this.lastOrders = await this.gateway.listOpenOrders(this.options.conditionId);
+        this.openOrderCount = this.lastOrders.length;
+        this.openOrderNotional = this.lastOrders.reduce(
+          (sum, order) => sum + order.price * Math.max(0, order.size - order.matchedSize),
+          0,
+        );
+      }
+    });
+  }
+
+  listRestingOrders(): RestingOrder[] {
+    return this.lastOrders.map((order) => ({
+      id: order.id,
+      tokenId: order.tokenId,
+      side: order.side,
+      price: order.price,
+      size: order.size,
+      matchedSize: order.matchedSize,
+    }));
   }
 
   async lock(reason: string): Promise<void> {

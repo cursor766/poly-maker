@@ -6,7 +6,7 @@ import { z } from "zod";
 import { loadConfig, loadMarketMappings } from "../config.js";
 import { createLogger } from "../logger.js";
 import { MarketResolver } from "../polymarket/market-resolver.js";
-import { PolymarketOrderBookClient } from "../polymarket/orderbook-client.js";
+import { PolymarketDataApiClient } from "../polymarket/data-api-client.js";
 import { MatchMetadataClient } from "../source/match-metadata-client.js";
 import {
   deleteMarketConfig,
@@ -17,7 +17,7 @@ import {
   writeMarketConfig,
 } from "./config-writer.js";
 import { LeagueDiscoveryService } from "./league-discovery-service.js";
-import { listPublicLeagues, requireLeague } from "./league-registry.js";
+import { enqueueDeskCommand } from "./desk-commands.js";
 import {
   deleteMatchSession,
   listMatchSessions,
@@ -52,6 +52,7 @@ const leagueDiscoveryService = new LeagueDiscoveryService(
   config.MAKER_TARGET_RETURN_RATE,
   config.MIN_EDGE,
 );
+const dataApi = new PolymarketDataApiClient();
 const processManager = new MakerProcessManager(projectRoot);
 const defaultRuntimeLimits = limitsFromConfig(config);
 const sse = new SseHub();
@@ -104,6 +105,51 @@ async function controlStatus(): Promise<unknown> {
     process: processStatus,
     runtime: processStatus.running ? await readRuntimeStatus() : null,
   };
+}
+
+async function deskSnapshot(): Promise<{
+  markets: Record<
+    string,
+    {
+      conditionId: string;
+      trades: Awaited<ReturnType<PolymarketDataApiClient["fetchTrades"]>>;
+      holders: Awaited<ReturnType<PolymarketDataApiClient["fetchHolders"]>>;
+      error?: string;
+    }
+  >;
+}> {
+  const runtime = (await readRuntimeStatus()) as {
+    markets?: Array<{
+      sourceMarketId?: string;
+      conditionId?: string;
+      outcomes?: [string, string];
+    }>;
+  } | null;
+  const markets = runtime?.markets ?? [];
+  const entries = await Promise.all(
+    markets.map(async (market) => {
+      const sourceMarketId = market.sourceMarketId ?? "";
+      const conditionId = market.conditionId ?? "";
+      const outcomes = market.outcomes ?? ["Yes", "No"];
+      if (!sourceMarketId || !conditionId) {
+        return [
+          sourceMarketId,
+          { conditionId, trades: [], holders: [], error: "等待核心写入市场 ID" },
+        ] as const;
+      }
+      try {
+        const [trades, holders] = await Promise.all([
+          dataApi.fetchTrades(conditionId),
+          dataApi.fetchHolders(conditionId, outcomes),
+        ]);
+        return [sourceMarketId, { conditionId, trades, holders }] as const;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return [sourceMarketId, { conditionId, trades: [], holders: [], error: message }] as const;
+      }
+    }),
+  );
+  return { markets: Object.fromEntries(entries.filter(([id]) => id)) };
 }
 
 const server = createServer(async (request, response) => {
@@ -275,6 +321,24 @@ const server = createServer(async (request, response) => {
       const snapshot = await signalMonitor.stop();
       signalSse.publish("snapshot", snapshot);
       sendJson(response, 200, snapshot);
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/api/desk") {
+      sendJson(response, 200, await deskSnapshot());
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/api/desk/command") {
+      const running = await processManager.status();
+      if (!running.running) throw new Error("交易核心未运行，无法暂停或撤单");
+      const body = z
+        .object({
+          action: z.enum(["pause", "resume", "cancel"]),
+          sourceMarketId: z.string().min(1),
+          orderIds: z.array(z.string().min(1)).optional(),
+        })
+        .parse(await readJson(request));
+      const command = await enqueueDeskCommand(body);
+      sendJson(response, 202, { command });
       return;
     }
     sendJson(response, 404, { error: "接口不存在" });

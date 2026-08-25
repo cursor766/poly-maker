@@ -1,9 +1,13 @@
 import type { AuditLog } from "../logger.js";
-import type { PositionState, Quote, ResolvedMarket, TokenBook } from "../types.js";
+import type { PositionState, Quote, ResolvedMarket, RestingOrder, TokenBook } from "../types.js";
 import type { QuoteExecutor } from "./executor.js";
 
 function quoteKey(quote: Quote): string {
   return `${quote.tokenId}:${quote.side}`;
+}
+
+function paperOrderId(quote: Quote): string {
+  return `paper:${quote.tokenId}:${quote.side}:${quote.price.toFixed(4)}:${quote.size.toFixed(4)}`;
 }
 
 export class PaperExecutor implements QuoteExecutor {
@@ -52,6 +56,32 @@ export class PaperExecutor implements QuoteExecutor {
     const count = this.openQuotes.size;
     this.openQuotes.clear();
     await this.audit.write("paper_cancel_all", { reason, count });
+  }
+
+  async cancelOrders(orderIds: readonly string[], reason: string): Promise<void> {
+    if (orderIds.length === 0) {
+      await this.cancelAll(reason);
+      return;
+    }
+    const wanted = new Set(orderIds);
+    let removed = 0;
+    for (const [key, quote] of [...this.openQuotes]) {
+      if (!wanted.has(paperOrderId(quote))) continue;
+      this.openQuotes.delete(key);
+      removed += 1;
+    }
+    if (removed > 0) await this.audit.write("paper_cancel_orders", { reason, count: removed });
+  }
+
+  listRestingOrders(): RestingOrder[] {
+    return [...this.openQuotes.values()].map((quote) => ({
+      id: paperOrderId(quote),
+      tokenId: quote.tokenId,
+      side: quote.side,
+      price: quote.price,
+      size: quote.size,
+      matchedSize: 0,
+    }));
   }
 
   async lock(reason: string): Promise<void> {

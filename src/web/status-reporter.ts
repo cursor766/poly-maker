@@ -1,19 +1,25 @@
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import type { Quote, TradingMode } from "../types.js";
+import type { BookLevel, Quote, RestingOrder, TradingMode } from "../types.js";
 
 export interface MarketRuntimeStatus {
   name: string;
   round: number;
   polymarketSlug: string;
   sourceMarketId: string;
+  conditionId: string;
+  outcomes: readonly [string, string];
+  tokenIds: readonly [string, string];
   locked: boolean;
+  operatorPaused: boolean;
   reason?: string;
   rejectDetail?: string;
   sourceOpen: boolean | null;
   sourceLocked: boolean;
   fairPrices: Record<string, number>;
   plannedQuotes: Quote[];
+  openOrders: Array<RestingOrder & { outcome: string }>;
+  books: Record<string, { bids: BookLevel[]; asks: BookLevel[]; receivedAt: number }>;
   openOrderCount: number;
   openOrderNotional: number;
   notionalUsed: number;

@@ -5,7 +5,14 @@ import { ExposureBar } from "@/app/components/ExposureBar";
 import { MarketStatusCard } from "@/app/components/MarketStatusCard";
 import { StatusPill } from "@/app/components/StatusPill";
 import { Button, errorClass, inputClass } from "@/app/components/ui";
-import { api, type ControlStatus, type RuntimeLimits, type TradingMode } from "@/lib/api";
+import {
+  api,
+  type ControlStatus,
+  type DeskSnapshot,
+  type RuntimeLimits,
+  type RuntimeMarket,
+  type TradingMode,
+} from "@/lib/api";
 import { subscribeToStatus } from "@/lib/stream";
 
 export default function DashboardPage() {
@@ -16,6 +23,7 @@ export default function DashboardPage() {
   const [streamConnected, setStreamConnected] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [desk, setDesk] = useState<DeskSnapshot>({ markets: {} });
 
   const refresh = useCallback(async () => {
     try {
@@ -41,6 +49,29 @@ export default function DashboardPage() {
       window.clearInterval(fallback);
     };
   }, [refresh]);
+
+  useEffect(() => {
+    const marketIds = status?.runtime?.markets.map((market) => market.sourceMarketId).join(",") ?? "";
+    if (!marketIds) {
+      setDesk({ markets: {} });
+      return;
+    }
+    let cancelled = false;
+    const loadDesk = async () => {
+      try {
+        const next = await api<DeskSnapshot>("/api/desk");
+        if (!cancelled) setDesk(next);
+      } catch {
+        if (!cancelled) setDesk({ markets: {} });
+      }
+    };
+    void loadDesk();
+    const timer = window.setInterval(() => void loadDesk(), 8_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [status?.runtime?.markets.map((market) => market.sourceMarketId).join(",")]);
 
   async function start() {
     if (
@@ -87,6 +118,47 @@ export default function DashboardPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function sendDeskCommand(
+    action: "pause" | "resume" | "cancel",
+    sourceMarketId: string,
+    orderIds?: string[],
+  ) {
+    setBusy(true);
+    try {
+      await api("/api/desk/command", {
+        method: "POST",
+        body: JSON.stringify({ action, sourceMarketId, ...(orderIds ? { orderIds } : {}) }),
+      });
+      await refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function pauseMarket(sourceMarketId: string) {
+    if (!window.confirm("暂停会锁定该市场并撤销当前挂单，不会自动恢复。确认？")) return;
+    await sendDeskCommand("pause", sourceMarketId);
+  }
+
+  async function resumeMarket(sourceMarketId: string) {
+    if (!window.confirm("恢复后将按当前源赔率和盘口重新挂单。确认？")) return;
+    await sendDeskCommand("resume", sourceMarketId);
+  }
+
+  async function cancelOrder(market: RuntimeMarket, orderId: string) {
+    const quoting = !market.locked && !market.operatorPaused;
+    if (
+      quoting &&
+      !window.confirm("核心仍在报价，下一轮会重挂这张单。要彻底停掉请先暂停本市场。仍要撤这张单？")
+    ) {
+      return;
+    }
+    if (!quoting && !window.confirm("确认撤销这张挂单？")) return;
+    await sendDeskCommand("cancel", market.sourceMarketId, [orderId]);
   }
 
   const runtime = status?.runtime;
@@ -198,7 +270,16 @@ export default function DashboardPage() {
       {runtime && (
         <section className="grid gap-3">
           {runtime.markets.map((market) => (
-            <MarketStatusCard market={market} key={market.sourceMarketId} />
+            <MarketStatusCard
+              market={market}
+              desk={desk.markets[market.sourceMarketId]}
+              mode={runtime.mode}
+              busy={busy}
+              key={market.sourceMarketId}
+              onPause={() => void pauseMarket(market.sourceMarketId)}
+              onResume={() => void resumeMarket(market.sourceMarketId)}
+              onCancel={(orderId) => void cancelOrder(market, orderId)}
+            />
           ))}
         </section>
       )}
