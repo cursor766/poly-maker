@@ -89,6 +89,7 @@ export class MakerApp {
   private readonly configWatchers: FSWatcher[] = [];
   private reloadTimers = new Map<string, NodeJS.Timeout>();
   private reloadSerial: Promise<void> = Promise.resolve();
+  private deskConsumeSerial: Promise<void> = Promise.resolve();
   private pendingDeskCommands: DeskCommand[] = [];
   private tradingClient: PolymarketTradingClient | undefined;
   private tradingSupervisor: TradingSupervisor | undefined;
@@ -194,6 +195,8 @@ export class MakerApp {
       );
       await this.tradingSupervisor.start();
     }
+    await skipExistingDeskCommands();
+    this.startConfigWatchers();
     if (!this.config.OBSERVE_ONLY) {
       this.timer = setInterval(() => void this.evaluateAll(), this.config.REFRESH_MS);
     }
@@ -207,8 +210,6 @@ export class MakerApp {
       "maker application started",
     );
     this.statusReporter.start();
-    await skipExistingDeskCommands();
-    this.startConfigWatchers();
   }
 
   async stop(reason = "shutdown"): Promise<void> {
@@ -383,7 +384,7 @@ export class MakerApp {
       {
         path: resolve(DESK_COMMANDS_PATH),
         reload: async () => {
-          await consumeDeskCommands((command) => this.applyDeskCommand(command));
+          await this.consumeDeskCommandFile();
         },
       },
     ];
@@ -551,6 +552,7 @@ export class MakerApp {
     }
     this.evaluating = true;
     try {
+      await this.consumeDeskCommandFile();
       await this.flushPendingDeskCommands();
       await Promise.all(this.runtimes.map((runtime) => this.evaluate(runtime)));
     } finally {
@@ -730,6 +732,15 @@ export class MakerApp {
 
   private activeRuntimeIds(): Set<string> {
     return new Set(this.runtimes.map((runtime) => runtime.mapping.sourceMarketId));
+  }
+
+  private consumeDeskCommandFile(): Promise<void> {
+    this.deskConsumeSerial = this.deskConsumeSerial
+      .catch(() => undefined)
+      .then(async () => {
+        await consumeDeskCommands((command) => this.applyDeskCommand(command));
+      });
+    return this.deskConsumeSerial;
   }
 
   private async flushPendingDeskCommands(): Promise<void> {
