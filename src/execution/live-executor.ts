@@ -1,5 +1,6 @@
 import type { AuditLog } from "../logger.js";
 import type { TradingGateway } from "../polymarket/trading-client.js";
+import { clobPrice, clobSize } from "../strategy/tick.js";
 import type {
   ManagedOrder,
   PositionState,
@@ -329,7 +330,11 @@ export class LiveExecutor implements QuoteExecutor {
   }
 
   private async placeQuote(market: ResolvedMarket, quote: Quote): Promise<void> {
-    const orderId = await this.gateway.placeLimitOrder(quote);
+    const orderId = await this.gateway.placeLimitOrder({
+      ...quote,
+      price: clobPrice(quote.price, market.tickSize),
+      size: clobSize(quote.size),
+    });
     await this.audit.write("live_quote", {
       market: market.slug,
       conditionId: this.options.conditionId,

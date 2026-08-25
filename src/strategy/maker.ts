@@ -1,4 +1,5 @@
 import type { PositionState, Quote, ResolvedMarket, TokenBook } from "../types.js";
+import { ceilToTick, clampPrice, clobSize, floorToTick } from "./tick.js";
 
 export interface MakerParameters {
   minEdge: number;
@@ -113,18 +114,6 @@ export function describeTopOfBookSkip(
   return `买一+1tick ${(queueTarget * 100).toFixed(1)}¢ 超过安全上限 ${(safeCap * 100).toFixed(1)}¢（受限于${binding}）`;
 }
 
-function floorToTick(value: number, tick: number): number {
-  return Math.floor((value + 1e-12) / tick) * tick;
-}
-
-function ceilToTick(value: number, tick: number): number {
-  return Math.ceil((value - 1e-12) / tick) * tick;
-}
-
-function clampPrice(value: number, tick: number): number {
-  return Math.min(1 - tick, Math.max(tick, value));
-}
-
 export function complementTargetBuyPrices(
   firstFair: number,
   secondFair: number,
@@ -153,7 +142,7 @@ export function buildManualBuyQuotes(input: {
   const tick = input.tickSize;
   const layers = Math.max(1, Math.min(10, Math.floor(input.layers)));
   const spacing = Math.max(1, Math.floor(input.spacingTicks));
-  const size = Math.max(input.minOrderSize, Math.floor(input.shares * 100) / 100);
+  const size = clobSize(Math.max(input.minOrderSize, Math.floor(input.shares * 100) / 100));
   const quotes: Quote[] = [];
   let previous = Number.POSITIVE_INFINITY;
   for (let level = 0; level < layers; level += 1) {
@@ -180,7 +169,7 @@ export function generateMakerQuotes(
 ): Quote[] {
   const quotes: Quote[] = [];
   const halfSpread = Math.max(parameters.quoteHalfSpread, parameters.minEdge);
-  const size = Math.max(parameters.orderSize, market.minOrderSize);
+  const size = clobSize(Math.max(parameters.orderSize, market.minOrderSize));
 
   market.outcomes.forEach((outcome, index) => {
     const tokenId = market.tokenIds[index];
@@ -279,7 +268,7 @@ export function generateComplementBuyQuotes(
       const size = Math.min(positionCapacity, targetNotional / price);
       if (size + 1e-12 < market.minOrderSize || price * size <= 0) break;
 
-      const roundedSize = Math.floor(size * 100) / 100;
+      const roundedSize = clobSize(Math.floor(size * 100) / 100);
       if (roundedSize + 1e-12 < market.minOrderSize) break;
       quotes.push({ tokenId, outcome, side: "BUY", price, size: roundedSize });
       const quoteNotional = price * roundedSize;
@@ -349,7 +338,7 @@ export function generateTopOfBookBuyQuotes(
       availableNotional,
     );
     const size = Math.min(positionCapacity, targetNotional / queueTarget);
-    const roundedSize = Math.floor(size * 100) / 100;
+    const roundedSize = clobSize(Math.floor(size * 100) / 100);
     if (roundedSize + 1e-12 < market.minOrderSize) return;
     quotes.push({ tokenId, outcome, side: "BUY", price: queueTarget, size: roundedSize });
     availableNotional -= queueTarget * roundedSize;

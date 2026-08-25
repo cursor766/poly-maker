@@ -23,6 +23,7 @@ import {
   generateMakerQuotes,
   generateTopOfBookBuyQuotes,
 } from "./strategy/maker.js";
+import { clobPrice, clobSize } from "./strategy/tick.js";
 import { OddsTui } from "./tui/odds-tui.js";
 import type {
   FairSnapshot,
@@ -869,8 +870,8 @@ export class MakerApp {
             tokenId,
             outcome: item.outcome,
             side: "BUY" as const,
-            price: item.price,
-            size: item.size,
+            price: clobPrice(item.price, runtime.market.tickSize),
+            size: clobSize(item.size),
           },
         ];
       });
@@ -903,8 +904,8 @@ export class MakerApp {
             ? {
                 ...quote,
                 outcome,
-                price: command.price ?? quote.price,
-                size: command.size ?? quote.size,
+                price: clobPrice(command.price ?? quote.price, runtime.market.tickSize),
+                size: clobSize(command.size ?? quote.size),
               }
             : quote,
       );

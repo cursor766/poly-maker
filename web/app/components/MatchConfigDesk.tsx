@@ -25,6 +25,7 @@ import {
 import { estimateMarketBudget } from "@/lib/budget";
 import { ensureMakerRunning, MATCH_DESK_MODE } from "@/lib/maker-session";
 import { subscribeToStatus } from "@/lib/stream";
+import { clampPrice, clobSize } from "@/lib/tick";
 
 interface MarketForm {
   enabled: boolean;
@@ -58,13 +59,10 @@ function expandBuyQuotes(
   const quotes: Array<{ outcome: string; price: number; size: number }> = [];
   let previous = Number.POSITIVE_INFINITY;
   for (let level = 0; level < Math.max(1, layers); level += 1) {
-    const next = Math.min(
-      1 - tick,
-      Math.max(tick, Math.floor((price - level * spacingTicks * tick + 1e-12) / tick) * tick),
-    );
+    const next = clampPrice(price - level * spacingTicks * tick, tick);
     if (next >= previous) continue;
     previous = next;
-    quotes.push({ outcome, price: next, size: shares });
+    quotes.push({ outcome, price: next, size: clobSize(shares) });
   }
   return quotes;
 }

@@ -15,6 +15,7 @@ import {
   complementBuyPricesOnTick,
   sourceImpliedSum,
 } from "@/lib/complement-prices";
+import { clampPrice } from "@/lib/tick";
 
 function cents(value: number): string {
   return `${(value * 100).toFixed(value * 100 >= 10 ? 0 : 1)}¢`;
@@ -108,10 +109,8 @@ export function GameTicket({
   );
   const askTotal = complementAskTotal(autoReturnRate, market.overround || sourceSum || 1);
   const rakePct = (1 - autoReturnRate) * 100;
-  const price =
-    priceCents === ""
-      ? (suggested ?? 0)
-      : Math.min(1 - market.tickSize, Math.max(market.tickSize, Number(priceCents) / 100));
+  const rawPrice = priceCents === "" ? (suggested ?? 0) : Number(priceCents) / 100;
+  const price = rawPrice > 0 ? clampPrice(rawPrice, market.tickSize) : 0;
   const asks = [...(book?.asks ?? [])].slice(0, 6).reverse();
   const bids = (book?.bids ?? []).slice(0, 6);
   const depthMax = maxSize([...asks, ...bids]);
@@ -123,10 +122,9 @@ export function GameTicket({
 
   const layerPreview = useMemo(() => {
     const tick = market.tickSize;
-    return Array.from({ length: Math.max(1, layers) }, (_, index) => {
-      const next = Math.min(1 - tick, Math.max(tick, price - index * spacing * tick));
-      return next;
-    }).filter((value, index, list) => list.indexOf(value) === index);
+    return Array.from({ length: Math.max(1, layers) }, (_, index) =>
+      clampPrice(price - index * spacing * tick, tick),
+    ).filter((value, index, list) => list.indexOf(value) === index);
   }, [layers, market.tickSize, price, spacing]);
 
   return (

@@ -1,4 +1,3 @@
-import { stackedVigAskTotal } from "../strategy/maker.js";
 import { normalizeDecimalOdds } from "../odds/probability.js";
 import type {
   ListedMoneylineMarket,
@@ -6,6 +5,8 @@ import type {
   QuoteableMarketKind,
 } from "../polymarket/market-resolver.js";
 import type { MatchMetadataClient } from "../source/match-metadata-client.js";
+import { stackedVigAskTotal } from "../strategy/maker.js";
+import { clampPrice, floorToTick } from "../strategy/tick.js";
 import type { SourceMarketMetadata, SourceMatchMetadata } from "../types.js";
 import { parseMarketUrls } from "./url-parser.js";
 
@@ -47,10 +48,6 @@ export interface MarketPreview {
   markets: PreviewMarket[];
 }
 
-function floorToTick(value: number, tick: number): number {
-  return Math.floor((value + 1e-12) / tick) * tick;
-}
-
 function recommendedPrices(
   probabilities: readonly [number, number],
   targetReturnRate: number,
@@ -62,7 +59,7 @@ function recommendedPrices(
   const raw = [1 - probabilities[1] * askTotal, 1 - probabilities[0] * askTotal] as const;
   return raw.map((price) => {
     if (!Number.isFinite(price) || price <= 0 || price >= 1) return null;
-    return Math.min(1 - tickSize, Math.max(tickSize, floorToTick(price, tickSize)));
+    return clampPrice(floorToTick(price, tickSize), tickSize);
   }) as [number | null, number | null];
 }
 
