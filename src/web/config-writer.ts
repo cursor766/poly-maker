@@ -22,6 +22,7 @@ const configuredMarketSchema = z.object({
   levelSpacingTicks: z.number().int().positive(),
   targetReturnRate: z.number().positive().max(0.99),
   quoteMode: z.enum(["complement-buy", "top-of-book"]).optional(),
+  kind: z.enum(["moneyline", "child_moneyline", "map_handicap", "totals"]).optional(),
 });
 
 export const saveMarketConfigSchema = z.object({
@@ -65,6 +66,7 @@ function generateMappings(parsed: SaveMarketConfig): MarketMapping[] {
     polymarketSlug: market.polymarketSlug,
     round: market.round,
     quoteMode: market.quoteMode ?? "complement-buy",
+    kind: market.kind,
     outcomes: market.outcomes,
     orderNotional: market.orderNotional,
     quoteLevels: market.quoteLevels,

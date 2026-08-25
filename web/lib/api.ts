@@ -106,6 +106,10 @@ export interface RuntimeLimits {
   maxOrderNotional: number;
   maxOutcomePosition: number;
   maxTotalExposure: number;
+  maxGameNotional: number;
+  maxMapNotional: number;
+  refillTopDelayMs: number;
+  baitPositionRatio: number;
   makerTargetReturnRate: number;
   oddsStaleMs: number;
   repriceThresholdTicks: number;
@@ -125,6 +129,7 @@ export interface MarketMapping {
   levelSpacingTicks?: number;
   targetReturnRate?: number;
   quoteMode?: "two-sided" | "complement-buy" | "top-of-book";
+  kind?: "moneyline" | "child_moneyline" | "map_handicap" | "totals";
 }
 
 export interface LeagueSummary {

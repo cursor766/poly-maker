@@ -268,7 +268,8 @@ export function GameTicket({
               {combinedAuto
                 ? `。两边都成交会花 ${cents(combinedAuto)} 拿回 $1，锁利约 ${cents(1 - combinedAuto)}`
                 : ""}
-              。{runtime?.reason ? ` 当前：${runtime.reason}` : ""}
+              。空簿会铺多层，顶档成交后延迟再补。
+              {runtime?.reason ? ` 当前：${runtime.reason}` : ""}
             </p>
           ) : null}
           <div className="mb-3 flex items-center justify-between">

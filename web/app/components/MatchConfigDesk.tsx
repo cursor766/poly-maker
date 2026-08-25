@@ -76,12 +76,17 @@ async function waitForRuntimeMarket(sourceMarketId: string, timeoutMs = 20_000) 
     }
     await new Promise((resolve) => setTimeout(resolve, 400));
   }
-  throw new Error("这个小局还没加载进挂单进程。稍后再试。");
+  throw new Error("这个盘口还没加载进挂单进程。稍后再试。");
 }
 
 function isGameMarket(market: MarketPreview["markets"][number]): boolean {
   const kind = marketKind(market);
-  return kind === "child_moneyline" || kind === "map_handicap" || kind === "totals";
+  return (
+    kind === "moneyline" ||
+    kind === "child_moneyline" ||
+    kind === "map_handicap" ||
+    kind === "totals"
+  );
 }
 
 function marketBadge(market: MarketPreview["markets"][number]): string {
@@ -115,9 +120,9 @@ function buildForms(
         {
           enabled: existing?.enabled ?? false,
           outcomes,
-          orderNotional: existing?.orderNotional ?? 5,
-          quoteLevels: existing?.quoteLevels ?? 2,
-          levelSpacingTicks: existing?.levelSpacingTicks ?? 2,
+          orderNotional: existing?.orderNotional ?? 50,
+          quoteLevels: existing?.quoteLevels ?? 4,
+          levelSpacingTicks: existing?.levelSpacingTicks ?? 1,
           targetReturnRate: existing?.targetReturnRate ?? defaultTargetReturnRate,
           quoteMode,
         },
@@ -140,7 +145,7 @@ function withAutoFollow(
     quoteMode: "complement-buy",
     targetReturnRate,
     orderNotional,
-    quoteLevels: 1,
+    quoteLevels: 4,
     levelSpacingTicks: 1,
   };
 }
@@ -166,7 +171,7 @@ export function MatchConfigDesk({
   const [message, setMessage] = useState("");
   const [autoFollow, setAutoFollow] = useState(false);
   const [autoReturnRate, setAutoReturnRate] = useState(0.95);
-  const [autoNotional, setAutoNotional] = useState(5);
+  const [autoNotional, setAutoNotional] = useState(50);
 
   const applyStatus = useCallback((status: ControlStatus) => {
     setMakerRunning(status.process.running);
@@ -328,6 +333,7 @@ export function MatchConfigDesk({
             sourceMarketId: market.sourceMarketId,
             polymarketSlug: market.polymarketSlug,
             round: market.round,
+            kind: marketKind(market),
             outcomes: market.outcomes.map((outcome, index) => ({
               sourceOddId: outcome.sourceOddId,
               outcome: form.outcomes[index] as string,
@@ -557,8 +563,7 @@ export function MatchConfigDesk({
         </h1>
         <p className="mt-2.5 max-w-[62ch] text-[15px] leading-relaxed text-mute">
           勾选全场或小局后直接实盘挂单，不用再到交易台启动核心。自动跟赔会保留源站大于 100%
-          的隐含水分，再额外加 5 个点：卖价合计 = 源隐含 +
-          5¢，互补买价更低。也可以继续用小局票上手动一键挂单。
+          的隐含水分，再额外加 5 个点。全场和小局都在票上跟赔；空簿会铺多层，单边吃太多会停。
         </p>
       </header>
 
@@ -608,7 +613,8 @@ export function MatchConfigDesk({
               <div>
                 <h2 className="m-0 text-lg font-medium">盘口与挂单参数</h2>
                 <p className="mt-1.5 text-sm leading-relaxed text-mute">
-                  全场仍用参数卡。小局票可以手动挂，也可以勾选后按源赔率自动双边跟价。保存或启动自动跟赔后会直接挂单。
+                  全场和小局都用同一张票：勾选即启用，顶部打开自动跟赔后按源赔率双边跟价。空簿会在目标价下铺
+                  55/54/53¢ 这类多层；附近已有做市商则只挂顶档。保存或启动自动跟赔后会直接挂单。
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -696,7 +702,7 @@ export function MatchConfigDesk({
                 {(autoReturnRate * 100).toFixed(0)}% 表示再加{" "}
                 {((1 - autoReturnRate) * 100).toFixed(0)} 个点：卖价合计 = 源隐含 +{" "}
                 {((1 - autoReturnRate) * 100).toFixed(0)}
-                ¢，买单合计更低。源赔率变动超过当前挂价后自动改价。
+                ¢，买单合计更低。源赔率变动超过当前挂价后自动改价。附近没有其他做市商时会在目标价下面再铺几层；顶档被吃掉后会等一会儿再补，单边仓位过重就停这一边。
               </p>
               {autoFollow ? (
                 <div className="grid items-end gap-2.5 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
@@ -757,7 +763,7 @@ export function MatchConfigDesk({
                 <p className="mt-2 mb-0 text-xs text-mute">
                   {budgetExceeded
                     ? "超过账户额度上限，请减少市场、层数或每层额度。"
-                    : "按每个市场双边 × 层数 × 每层额度估算。"}
+                    : `按每个市场双边 × 层数 × 每层额度估算。全场/单局单盘上限 $${limits.maxGameNotional}，让分/总数 $${limits.maxMapNotional}。`}
                 </p>
               </div>
             )}

@@ -51,7 +51,8 @@ export default function DashboardPage() {
   }, [refresh]);
 
   useEffect(() => {
-    const marketIds = status?.runtime?.markets.map((market) => market.sourceMarketId).join(",") ?? "";
+    const marketIds =
+      status?.runtime?.markets.map((market) => market.sourceMarketId).join(",") ?? "";
     if (!marketIds) {
       setDesk({ markets: {} });
       return;
@@ -213,15 +214,23 @@ export default function DashboardPage() {
       {runtime && (
         <section className="mb-5 grid gap-2.5 rounded-[18px] border border-line bg-panel p-5 sm:grid-cols-2 xl:grid-cols-4">
           <div className="rounded-xl border border-line bg-inset px-4 py-3.5">
-            <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">账户余额</span>
-            <strong className="mt-1.5 block font-display text-xl">${runtime.cash.toFixed(2)}</strong>
+            <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">
+              账户余额
+            </span>
+            <strong className="mt-1.5 block font-display text-xl">
+              ${runtime.cash.toFixed(2)}
+            </strong>
           </div>
           <div className="rounded-xl border border-line bg-inset px-4 py-3.5">
-            <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">活跃市场</span>
+            <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">
+              活跃市场
+            </span>
             <strong className="mt-1.5 block font-display text-xl">{runtime.markets.length}</strong>
           </div>
           <div className="rounded-xl border border-line bg-inset px-4 py-3.5">
-            <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">开放订单</span>
+            <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">
+              开放订单
+            </span>
             <strong className="mt-1.5 block font-display text-xl">{orders}</strong>
           </div>
           <div className="rounded-xl border border-line bg-inset px-4 py-3.5">
@@ -232,7 +241,10 @@ export default function DashboardPage() {
             />
           </div>
           <div className="sm:col-span-2 xl:col-span-4">
-            <label className="grid max-w-md gap-2 text-xs font-medium text-mute" htmlFor="account-limit">
+            <label
+              className="grid max-w-md gap-2 text-xs font-medium text-mute"
+              htmlFor="account-limit"
+            >
               账户额度上限
               <div className="flex gap-2">
                 <input
@@ -248,6 +260,12 @@ export default function DashboardPage() {
                 </Button>
               </div>
             </label>
+            {limits ? (
+              <p className="mt-2 mb-0 text-[12px] text-mute">
+                全场/单局单盘 ${limits.maxGameNotional}，让分/总数单盘 ${limits.maxMapNotional}
+                。单笔不超过 ${limits.maxOrderNotional}。
+              </p>
+            ) : null}
           </div>
         </section>
       )}

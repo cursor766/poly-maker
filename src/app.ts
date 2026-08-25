@@ -17,6 +17,7 @@ import { TradingSupervisor } from "./polymarket/trading-supervisor.js";
 import { RiskEngine } from "./risk/risk-engine.js";
 import { MatchMetadataClient } from "./source/match-metadata-client.js";
 import { MqttOddsFeed } from "./source/mqtt-client.js";
+import { inferMappedMarketKind, marketNotionalCap } from "./strategy/ladder.js";
 import {
   describeTopOfBookSkip,
   generateComplementBuyQuotes,
@@ -61,6 +62,8 @@ interface MarketRuntime {
   manualQuotes: Quote[] | undefined;
   lastBooks: ReadonlyMap<string, TokenBook> | undefined;
   protection: Promise<void> | undefined;
+  lastSharesByToken: Map<string, number>;
+  lastFillAtByToken: Map<string, number>;
 }
 
 export class MakerApp {
@@ -302,6 +305,8 @@ export class MakerApp {
       manualQuotes: undefined,
       lastBooks: undefined,
       protection: undefined,
+      lastSharesByToken: new Map(),
+      lastFillAtByToken: new Map(),
     };
   }
 
@@ -616,8 +621,10 @@ export class MakerApp {
     }
 
     try {
+      this.noteFills(runtime);
       const fairByOutcome = mapFairProbabilities(runtime.mapping, runtime.market, fair);
       const reservedAccountNotional = this.otherOpenNotional(runtime);
+      const kind = inferMappedMarketKind(runtime.mapping);
       const complementParameters = {
         targetReturnRate:
           runtime.mapping.targetReturnRate ?? this.runtimeLimits.makerTargetReturnRate,
@@ -625,7 +632,19 @@ export class MakerApp {
         maxOutcomePosition: this.runtimeLimits.maxOutcomePosition,
         maxOrderNotional: this.runtimeLimits.maxOrderNotional,
         maxAccountNotional: this.runtimeLimits.maxAccountNotional,
+        maxMarketNotional: marketNotionalCap(
+          kind,
+          this.runtimeLimits.maxGameNotional,
+          this.runtimeLimits.maxMapNotional,
+        ),
         reservedAccountNotional,
+        adaptiveLadder: true,
+        nearbyTicks: 3,
+        refillTopDelayMs: this.runtimeLimits.refillTopDelayMs,
+        now: Date.now(),
+        lastFillAtByToken: runtime.lastFillAtByToken,
+        ownBidsByToken: this.ownBidsByToken(runtime),
+        baitPositionRatio: this.runtimeLimits.baitPositionRatio,
         quoteLevels: runtime.mapping.quoteLevels ?? this.config.QUOTE_LEVELS,
         levelSpacingTicks:
           runtime.mapping.levelSpacingTicks ?? this.config.QUOTE_LEVEL_SPACING_TICKS,
@@ -955,6 +974,33 @@ export class MakerApp {
       price: order.price,
       size: Math.max(order.size - order.matchedSize, 0),
     }));
+  }
+
+  private ownBidsByToken(
+    runtime: MarketRuntime,
+  ): Map<string, Array<{ price: number; size: number }>> {
+    const byToken = new Map<string, Array<{ price: number; size: number }>>();
+    for (const order of runtime.executor.listRestingOrders()) {
+      if (order.side !== "BUY") continue;
+      const remaining = Math.max(0, order.size - order.matchedSize);
+      if (remaining <= 0) continue;
+      const levels = byToken.get(order.tokenId) ?? [];
+      levels.push({ price: order.price, size: remaining });
+      byToken.set(order.tokenId, levels);
+    }
+    return byToken;
+  }
+
+  private noteFills(runtime: MarketRuntime): void {
+    const now = Date.now();
+    for (const tokenId of runtime.market.tokenIds) {
+      const shares = runtime.executor.positions.byToken.get(tokenId) ?? 0;
+      const previous = runtime.lastSharesByToken.get(tokenId);
+      if (previous !== undefined && shares > previous + 1e-9) {
+        runtime.lastFillAtByToken.set(tokenId, now);
+      }
+      runtime.lastSharesByToken.set(tokenId, shares);
+    }
   }
 
   private otherOpenNotional(runtime: MarketRuntime): number {

@@ -1,4 +1,5 @@
 import type { PositionState, Quote, ResolvedMarket, TokenBook } from "../types.js";
+import { adaptiveQuoteLevels, shouldSuppressTopRefill, sideIsBaited } from "./ladder.js";
 import { ceilToTick, clampPrice, clobSize, floorToTick } from "./tick.js";
 
 export interface MakerParameters {
@@ -19,6 +20,14 @@ export interface ComplementMakerParameters {
   levelSpacingTicks: number;
   sourceOverround?: number;
   reservedAccountNotional?: number;
+  maxMarketNotional?: number;
+  adaptiveLadder?: boolean;
+  nearbyTicks?: number;
+  refillTopDelayMs?: number;
+  now?: number;
+  lastFillAtByToken?: ReadonlyMap<string, number>;
+  ownBidsByToken?: ReadonlyMap<string, readonly { price: number; size: number }[]>;
+  baitPositionRatio?: number;
 }
 
 export function longShareExposure(positions: PositionState): number {
@@ -250,11 +259,20 @@ export function generateComplementBuyQuotes(
     parameters.sourceOverround ?? 1,
   );
   if (!rawBuyPrices) return [];
-  let availableNotional = availableAccountNotional(
+  const localShares = market.tokenIds.reduce(
+    (sum, tokenId) => sum + Math.max(0, positions.byToken.get(tokenId) ?? 0),
+    0,
+  );
+  const accountAvailable = availableAccountNotional(
     parameters.maxAccountNotional,
     positions,
     parameters.reservedAccountNotional,
   );
+  const marketAvailable = Math.max(
+    0,
+    (parameters.maxMarketNotional ?? parameters.maxAccountNotional) - localShares,
+  );
+  let availableNotional = Math.min(accountAvailable, marketAvailable);
   const quotes: Quote[] = [];
 
   market.outcomes.forEach((outcome, index) => {
@@ -265,15 +283,49 @@ export function generateComplementBuyQuotes(
     }
     const book = books.get(tokenId);
     if (!book) throw new Error(`missing complementary quote book for ${outcome}`);
+    const currentPosition = positions.byToken.get(tokenId) ?? 0;
+    if (
+      sideIsBaited(
+        currentPosition,
+        parameters.maxMarketNotional ?? parameters.maxAccountNotional,
+        parameters.baitPositionRatio ?? 0.6,
+      )
+    ) {
+      return;
+    }
     const bestAsk = book.asks[0]?.price;
     const postOnlyPrice =
       bestAsk === undefined ? rawPrice : Math.min(rawPrice, bestAsk - market.tickSize);
     const topPrice = clampPrice(floorToTick(postOnlyPrice, market.tickSize), market.tickSize);
     if (bestAsk !== undefined && topPrice >= bestAsk) return;
-    const currentPosition = positions.byToken.get(tokenId) ?? 0;
     let positionCapacity = Math.max(0, parameters.maxOutcomePosition - currentPosition);
+    const ownBids = parameters.ownBidsByToken?.get(tokenId) ?? [];
+    const layerShares = Math.max(
+      market.minOrderSize,
+      parameters.orderNotional / Math.max(topPrice, market.tickSize),
+    );
+    const levels = parameters.adaptiveLadder
+      ? adaptiveQuoteLevels({
+          book,
+          targetPrice: topPrice,
+          tickSize: market.tickSize,
+          nearbyTicks: parameters.nearbyTicks ?? 3,
+          ownBids,
+          layerShares,
+          maxLevels: parameters.quoteLevels,
+        })
+      : parameters.quoteLevels;
+    const startLevel =
+      levels > 1 &&
+      shouldSuppressTopRefill(
+        parameters.lastFillAtByToken?.get(tokenId),
+        parameters.now ?? Date.now(),
+        parameters.refillTopDelayMs ?? 0,
+      )
+        ? 1
+        : 0;
     let previousPrice = Number.POSITIVE_INFINITY;
-    for (let level = 0; level < parameters.quoteLevels; level += 1) {
+    for (let level = startLevel; level < levels; level += 1) {
       const rawLevelPrice = topPrice - level * parameters.levelSpacingTicks * market.tickSize;
       const price = clampPrice(floorToTick(rawLevelPrice, market.tickSize), market.tickSize);
       if (price >= previousPrice) continue;
@@ -322,11 +374,20 @@ export function generateTopOfBookBuyQuotes(
   ] as const;
   if (targetAsks.some((price) => price <= 0 || price >= 1)) return [];
   const complementCaps = [1 - targetAsks[1], 1 - targetAsks[0]] as const;
-  let availableNotional = availableAccountNotional(
+  const localShares = market.tokenIds.reduce(
+    (sum, tokenId) => sum + Math.max(0, positions.byToken.get(tokenId) ?? 0),
+    0,
+  );
+  const accountAvailable = availableAccountNotional(
     parameters.maxAccountNotional,
     positions,
     parameters.reservedAccountNotional,
   );
+  const marketAvailable = Math.max(
+    0,
+    (parameters.maxMarketNotional ?? parameters.maxAccountNotional) - localShares,
+  );
+  let availableNotional = Math.min(accountAvailable, marketAvailable);
   const quotes: Quote[] = [];
 
   market.outcomes.forEach((outcome, index) => {
@@ -334,6 +395,16 @@ export function generateTopOfBookBuyQuotes(
     const fair = fairs[index];
     const complementCap = complementCaps[index];
     if (!tokenId || fair === undefined || complementCap === undefined) return;
+    const currentPosition = positions.byToken.get(tokenId) ?? 0;
+    if (
+      sideIsBaited(
+        currentPosition,
+        parameters.maxMarketNotional ?? parameters.maxAccountNotional,
+        parameters.baitPositionRatio ?? 0.6,
+      )
+    ) {
+      return;
+    }
     const book = books.get(tokenId);
     if (!book) return;
     const queueTarget = calculateTopOfBookPrice(
@@ -346,7 +417,6 @@ export function generateTopOfBookBuyQuotes(
       parameters.sourceOverround ?? 1,
     );
     if (queueTarget === null) return;
-    const currentPosition = positions.byToken.get(tokenId) ?? 0;
     const positionCapacity = Math.max(0, parameters.maxOutcomePosition - currentPosition);
     const targetNotional = Math.min(
       parameters.orderNotional,
