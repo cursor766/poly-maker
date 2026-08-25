@@ -35,32 +35,44 @@ export function MarketStatusCard({ market }: { market: RuntimeMarket }) {
     quotesByOutcome.set(quote.outcome, quotes);
   }
   return (
-    <article className={`deskMarket ${market.locked ? "locked" : ""}`}>
-      <header className="deskMarketHead">
+    <article className="relative overflow-hidden rounded-[10px] border border-line bg-panel">
+      <span
+        className={`absolute inset-y-0 left-0 w-0.5 ${market.locked ? "bg-rose" : "bg-gold"}`}
+      />
+      <header className="flex items-start justify-between gap-3.5 border-b border-line px-5 py-4">
         <div>
-          <span className="deskRound">{market.round === 0 ? "MATCH" : `GAME ${market.round}`}</span>
-          <h3>{market.name}</h3>
-          <p>{market.polymarketSlug}</p>
+          <span className="text-[11px] font-medium tracking-wide text-gold">
+            {market.round === 0 ? "MATCH" : `GAME ${market.round}`}
+          </span>
+          <h3 className="mt-1 text-base font-semibold tracking-tight">{market.name}</h3>
+          <p className="mt-1 text-[11px] text-mute">{market.polymarketSlug}</p>
         </div>
-        <span className={`marketState ${market.locked ? "locked" : "quoting"}`}>
+        <span
+          className={`rounded-md px-2 py-1.5 text-[10px] font-semibold ${
+            market.locked ? "bg-rose/10 text-rose" : "bg-sage/10 text-sage"
+          }`}
+        >
           {market.locked ? "LOCKED" : "QUOTING"}
         </span>
       </header>
 
-      <div className="deskOutcomes">
+      <div className="grid grid-cols-2 gap-px bg-line">
         {Object.entries(market.fairPrices).map(([outcome, price]) => (
-          <div className="deskOutcome" key={outcome}>
-            <div className="deskOutcomeHead">
-              <span>{outcome}</span>
-              <b>{price > 0 ? `${(price * 100).toFixed(1)}¢` : "—"}</b>
+          <div className="bg-raised px-5 py-4" key={outcome}>
+            <div className="flex justify-between gap-2.5">
+              <span className="truncate text-[13px] text-mute">{outcome}</span>
+              <b className="tabular-nums">{price > 0 ? `${(price * 100).toFixed(1)}¢` : "—"}</b>
             </div>
-            <div className="deskOutcomeMeta">
+            <div className="mt-2 flex justify-between text-[11px] text-mute">
               <span>仓位 {(market.positions[outcome] ?? 0).toFixed(2)}</span>
               <span>{quotesByOutcome.get(outcome)?.length ?? 0} 层</span>
             </div>
-            <div className="quoteChips">
+            <div className="mt-2 flex flex-wrap gap-1.5">
               {(quotesByOutcome.get(outcome) ?? []).map((quote) => (
-                <span key={`${quote.tokenId}-${quote.price}-${quote.size}`}>
+                <span
+                  className="rounded bg-inset px-1.5 py-0.5 text-[11px] text-mute"
+                  key={`${quote.tokenId}-${quote.price}-${quote.size}`}
+                >
                   {(quote.price * 100).toFixed(0)}¢ × {quote.size.toFixed(2)}
                 </span>
               ))}
@@ -69,28 +81,28 @@ export function MarketStatusCard({ market }: { market: RuntimeMarket }) {
         ))}
       </div>
 
-      <footer className="deskMarketFoot">
-        <div>
-          <span>真实挂单</span>
-          <b>
+      <footer className="grid grid-cols-3 gap-px bg-line text-[12px]">
+        <div className="bg-panel px-5 py-3">
+          <span className="text-mute">真实挂单</span>
+          <b className="mt-1 block tabular-nums">
             {market.openOrderCount} / ${market.openOrderNotional.toFixed(2)}
           </b>
         </div>
-        <div>
-          <span>市场占用</span>
-          <b>${market.notionalUsed.toFixed(2)}</b>
+        <div className="bg-panel px-5 py-3">
+          <span className="text-mute">市场占用</span>
+          <b className="mt-1 block tabular-nums">${market.notionalUsed.toFixed(2)}</b>
         </div>
-        <div>
-          <span>源盘口</span>
-          <b className={market.sourceLocked ? "textDanger" : "textSafe"}>
+        <div className="bg-panel px-5 py-3">
+          <span className="text-mute">源盘口</span>
+          <b className={`mt-1 block ${market.sourceLocked ? "text-rose" : "text-sage"}`}>
             {market.sourceLocked ? "锁盘" : "开放"}
           </b>
         </div>
       </footer>
       {(market.locked || market.rejectDetail) && (
-        <div className="riskMessage">
-          <span>风控原因</span>
-          <strong>{reasonText(market)}</strong>
+        <div className="border-t border-line px-5 py-3">
+          <span className="text-[11px] text-mute">风控原因</span>
+          <strong className="mt-1 block text-[13px] font-medium">{reasonText(market)}</strong>
         </div>
       )}
     </article>

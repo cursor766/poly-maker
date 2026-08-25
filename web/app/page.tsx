@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { LeagueAutoMaker } from "@/app/components/LeagueAutoMaker";
+import { Button, Field, errorClass, inputClass, panelClass } from "@/app/components/ui";
 import {
   api,
   type MarketMapping,
@@ -248,34 +249,38 @@ export default function ConfigurePage() {
 
   return (
     <>
-      <div className="pageHero">
-        <p className="eyebrow">Market desk</p>
-        <h1>配置盘口</h1>
-        <p className="lead">
+      <header className="mb-7">
+        <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-gold">
+          Market desk
+        </p>
+        <h1 className="m-0 font-display text-[34px] font-medium tracking-tight text-ink">
+          配置盘口
+        </h1>
+        <p className="mt-2.5 max-w-[62ch] text-[15px] leading-relaxed text-mute">
           先扫 KPL / KGL 赛程批量挂全场，或手动打开一场比赛改局数和层数。默认 paper / shadow，live
           仍要双重确认。
         </p>
-      </div>
+      </header>
 
       <LeagueAutoMaker limits={limits} makerRunning={makerRunning} onSaved={refreshSaved} />
 
       {savedMatches.length > 0 && (
-        <section className="panel" style={{ marginBottom: 18 }}>
-          <div className="panelTitle">
-            <div>
-              <h2>已保存的比赛</h2>
-              <p>点「继续配置」会重新拉取最新赔率，并恢复你上次的启用状态与挂单参数。</p>
-            </div>
+        <section className={`${panelClass} mb-5`}>
+          <div className="mb-4">
+            <h2 className="m-0 text-lg font-medium">已保存的比赛</h2>
+            <p className="mt-1.5 text-sm leading-relaxed text-mute">
+              点「继续配置」会重新拉取最新赔率，并恢复你上次的启用状态与挂单参数。
+            </p>
           </div>
-          <div className="sessionList">
+          <div className="grid gap-2.5">
             {savedMatches.map((match) => (
               <article
-                className="sessionCard"
+                className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line bg-inset px-4 py-3.5"
                 key={`${match.sourceMatchId}-${match.polymarketEventSlug}`}
               >
                 <div>
-                  <strong>{match.label}</strong>
-                  <small>
+                  <strong className="block text-[15px]">{match.label}</strong>
+                  <small className="mt-1 block text-xs text-mute">
                     {match.tournament ? `${match.tournament} · ` : ""}
                     {match.enabledCount}/{match.marketCount} 启用
                     {match.enabledRounds.length > 0
@@ -283,23 +288,13 @@ export default function ConfigurePage() {
                       : " · 暂无启用盘口"}
                   </small>
                 </div>
-                <div className="sessionActions">
-                  <button
-                    className="secondary"
-                    type="button"
-                    disabled={loading}
-                    onClick={() => void openSaved(match)}
-                  >
+                <div className="flex gap-2">
+                  <Button disabled={loading} onClick={() => void openSaved(match)} variant="secondary">
                     继续配置
-                  </button>
-                  <button
-                    className="deleteButton"
-                    type="button"
-                    disabled={loading}
-                    onClick={() => void deleteSaved(match)}
-                  >
+                  </Button>
+                  <Button disabled={loading} onClick={() => void deleteSaved(match)} variant="danger">
                     删除
-                  </button>
+                  </Button>
                 </div>
               </article>
             ))}
@@ -308,159 +303,164 @@ export default function ConfigurePage() {
       )}
 
       <details
-        className="manualPanel"
+        className="mb-5 overflow-hidden rounded-[18px] border border-line bg-panel"
         open={manualOpen}
         onToggle={(event) => setManualOpen(event.currentTarget.open)}
       >
-        <summary>
-          <div>
-            <h2>{preview ? "当前比赛链接" : "手动粘贴链接"}</h2>
-            <p>源站比赛页 + Polymarket 事件页。预览只读，不会下单。</p>
-          </div>
+        <summary className="cursor-pointer list-none px-5 py-4 [&::-webkit-details-marker]:hidden">
+          <h2 className="m-0 text-lg font-medium">
+            {preview ? "当前比赛链接" : "手动粘贴链接"}
+          </h2>
+          <p className="mt-1.5 text-sm text-mute">源站比赛页 + Polymarket 事件页。预览只读，不会下单。</p>
         </summary>
-        <section className="panel">
-          <div className="panelTitle">
+        <section className="border-t border-line px-5 py-5">
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h2>{preview ? "当前比赛链接" : "载入新比赛"}</h2>
-              <p>只读取比赛和盘口信息，不会在预览阶段创建订单。</p>
+              <h2 className="m-0 text-lg font-medium">{preview ? "当前比赛链接" : "载入新比赛"}</h2>
+              <p className="mt-1.5 text-sm text-mute">只读取比赛和盘口信息，不会在预览阶段创建订单。</p>
             </div>
             {preview && (
-              <button
-                className="secondary"
-                type="button"
-                disabled={loading}
-                onClick={() => void loadPreview()}
-              >
+              <Button disabled={loading} onClick={() => void loadPreview()} variant="secondary">
                 刷新赔率
-              </button>
+              </Button>
             )}
           </div>
-          <div className="urlGrid">
-            <div className="field">
-              <label htmlFor="source-url">源站比赛 URL</label>
+          <div className="grid items-end gap-3 md:grid-cols-[1fr_1fr_auto]">
+            <Field htmlFor="source-url" label="源站比赛 URL">
               <input
+                className={inputClass}
                 id="source-url"
                 value={sourceUrl}
                 onChange={(event) => setSourceUrl(event.target.value)}
                 placeholder={sampleSource}
               />
-            </div>
-            <div className="field">
-              <label htmlFor="polymarket-url">Polymarket 事件 URL</label>
+            </Field>
+            <Field htmlFor="polymarket-url" label="Polymarket 事件 URL">
               <input
+                className={inputClass}
                 id="polymarket-url"
                 value={polymarketUrl}
                 onChange={(event) => setPolymarketUrl(event.target.value)}
                 placeholder={samplePolymarket}
               />
-            </div>
-            <button
-              className="primary"
-              type="button"
-              disabled={loading || !sourceUrl || !polymarketUrl}
-              onClick={() => void loadPreview()}
-            >
+            </Field>
+            <Button disabled={loading || !sourceUrl || !polymarketUrl} onClick={() => void loadPreview()}>
               {loading ? "读取中…" : preview ? "重新预览" : "预览市场"}
-            </button>
+            </Button>
           </div>
-          {error && <div className="error">{error}</div>}
+          {error && <div className={`${errorClass} mt-3`}>{error}</div>}
         </section>
       </details>
 
       {preview && (
         <>
-          <div className="summary">
-            <div className="metric">
-              <span>对阵</span>
-              <strong>{preview.teams.join(" / ")}</strong>
+          <div className="mb-4 grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-xl border border-line bg-inset px-4 py-3.5">
+              <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">对阵</span>
+              <strong className="mt-1.5 block text-[15px]">{preview.teams.join(" / ")}</strong>
             </div>
-            <div className="metric">
-              <span>赛事</span>
-              <strong>{preview.tournament || "—"}</strong>
+            <div className="rounded-xl border border-line bg-inset px-4 py-3.5">
+              <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">赛事</span>
+              <strong className="mt-1.5 block text-[15px]">{preview.tournament || "—"}</strong>
             </div>
-            <div className="metric">
-              <span>赛制 / 比分</span>
-              <strong>
+            <div className="rounded-xl border border-line bg-inset px-4 py-3.5">
+              <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">赛制 / 比分</span>
+              <strong className="mt-1.5 block text-[15px]">
                 BO{preview.bestOf} · {preview.score}
               </strong>
             </div>
-            <div className="metric">
-              <span>已启用</span>
-              <strong>
+            <div className="rounded-xl border border-line bg-inset px-4 py-3.5">
+              <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">已启用</span>
+              <strong className="mt-1.5 block text-[15px]">
                 {Object.values(forms).filter((form) => form.enabled).length}/
                 {preview.markets.length}
               </strong>
             </div>
           </div>
 
-          <section className="panel">
-            <div className="panelTitle">
+          <section className={panelClass}>
+            <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h2>盘口与挂单参数</h2>
-                <p>默认全部关闭；勾选你要做的局。第一局结束后再回来只勾第二局即可。</p>
+                <h2 className="m-0 text-lg font-medium">盘口与挂单参数</h2>
+                <p className="mt-1.5 text-sm leading-relaxed text-mute">
+                  默认全部关闭；勾选你要做的局。第一局结束后再回来只勾第二局即可。
+                </p>
               </div>
-              <div className="quickRounds">
+              <div className="flex flex-wrap gap-2">
                 {preview.markets.map((market) => (
-                  <button
+                  <Button
                     key={`only-${market.sourceMarketId}`}
-                    className="secondary"
-                    type="button"
                     disabled={loading || !market.tradable}
                     onClick={() => setOnlyRound(market.round)}
+                    variant="secondary"
                   >
                     只开{roundLabel(market.round)}
-                  </button>
+                  </Button>
                 ))}
               </div>
             </div>
             {limits && (
-              <div className={`budgetBanner ${budgetExceeded ? "over" : ""}`}>
-                <div>
-                  <span>预计挂单占用</span>
+              <div
+                className={`mb-4 rounded-xl border px-4 py-3.5 ${
+                  budgetExceeded
+                    ? "border-rose/35 bg-rose/10"
+                    : "border-line bg-inset"
+                }`}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-[11px] uppercase tracking-[0.16em] text-mute-2">
+                    预计挂单占用
+                  </span>
                   <strong>
                     ${estimatedNotional.toFixed(2)} / ${limits.maxAccountNotional.toFixed(2)}
                   </strong>
                 </div>
-                <div className="budgetTrack">
+                <div className="mt-2.5 h-1 overflow-hidden rounded-full bg-line">
                   <i
+                    className={`block h-full ${budgetExceeded ? "bg-rose" : "bg-gold"}`}
                     style={{
                       width: `${Math.min(100, (estimatedNotional / limits.maxAccountNotional) * 100)}%`,
                     }}
                   />
                 </div>
-                <p>
+                <p className="mt-2 mb-0 text-xs text-mute">
                   {budgetExceeded
                     ? "超过账户额度上限，请减少市场、层数或每层额度。"
                     : "按每个市场双边 × 层数 × 每层额度估算。"}
                 </p>
               </div>
             )}
-            <div className="marketList">
+            <div className="grid gap-3">
               {preview.markets.length === 0 && (
-                <div className="empty">未找到源站与 Polymarket 可对应的胜负盘口。</div>
+                <div className="rounded-xl border border-dashed border-line px-4 py-8 text-center text-sm text-mute">
+                  未找到源站与 Polymarket 可对应的胜负盘口。
+                </div>
               )}
               {preview.markets.map((market) => {
                 const form = forms[market.sourceMarketId];
                 if (!form) return null;
                 return (
-                  <article className="marketCard" key={market.sourceMarketId}>
-                    <div className="marketHead">
-                      <div className="marketName">
-                        <span className="round">{roundLabel(market.round)}</span>
+                  <article
+                    className="rounded-[14px] border border-line bg-inset p-4"
+                    key={market.sourceMarketId}
+                  >
+                    <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                      <div className="flex items-start gap-3">
+                        <span className="mt-0.5 rounded-md border border-gold/25 bg-gold/10 px-2 py-1 font-mono text-[11px] font-semibold text-gold">
+                          {roundLabel(market.round)}
+                        </span>
                         <div>
-                          <strong>{market.name}</strong>
-                          <small>{market.polymarketSlug}</small>
+                          <strong className="block">{market.name}</strong>
+                          <small className="mt-1 block font-mono text-[11px] text-mute-2">
+                            {market.polymarketSlug}
+                          </small>
                         </div>
                       </div>
-                      <div className="mappingActions">
-                        <button
-                          className="swapButton"
-                          type="button"
-                          onClick={() => swapPairing(market.sourceMarketId)}
-                        >
+                      <div className="flex items-center gap-3">
+                        <Button onClick={() => swapPairing(market.sourceMarketId)} variant="ghost">
                           交换队伍配对
-                        </button>
-                        <label className="toggle">
+                        </Button>
+                        <label className="flex items-center gap-2 text-sm">
                           <input
                             type="checkbox"
                             checked={form.enabled}
@@ -473,18 +473,22 @@ export default function ConfigurePage() {
                         </label>
                       </div>
                     </div>
-                    <div className="marketBody">
+                    <div className="grid gap-2.5 md:grid-cols-2 xl:grid-cols-5">
                       {market.outcomes.map((outcome, index) => (
-                        <div className="outcomeBox" key={outcome.sourceOddId}>
-                          <div className="outcomeTop">
-                            <span>{outcome.sourceName}</span>
-                            <b>
+                        <div
+                          className="rounded-[10px] border border-line bg-raised p-3"
+                          key={outcome.sourceOddId}
+                        >
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <span className="text-sm">{outcome.sourceName}</span>
+                            <b className="font-display text-lg text-gold">
                               {outcome.recommendedBuyPrice === null
                                 ? "—"
                                 : `${Math.round(outcome.recommendedBuyPrice * 100)}¢`}
                             </b>
                           </div>
                           <select
+                            className={inputClass}
                             aria-label={`${outcome.sourceName} 对应 Polymarket outcome`}
                             value={form.outcomes[index]}
                             onChange={(event) => {
@@ -499,15 +503,15 @@ export default function ConfigurePage() {
                               </option>
                             ))}
                           </select>
-                          <div className="micro">
+                          <div className="mt-2 font-mono text-[11px] text-mute-2">
                             源赔率 {outcome.decimalOdd.toFixed(3)} · 公平概率{" "}
                             {(outcome.fairProbability * 100).toFixed(1)}%
                           </div>
                         </div>
                       ))}
-                      <div className="field">
-                        <label htmlFor={`notional-${market.sourceMarketId}`}>每层额度 ($)</label>
+                      <Field htmlFor={`notional-${market.sourceMarketId}`} label="每层额度 ($)">
                         <input
+                          className={inputClass}
                           id={`notional-${market.sourceMarketId}`}
                           type="number"
                           min="1"
@@ -519,10 +523,10 @@ export default function ConfigurePage() {
                             })
                           }
                         />
-                      </div>
-                      <div className="field">
-                        <label htmlFor={`levels-${market.sourceMarketId}`}>层数</label>
+                      </Field>
+                      <Field htmlFor={`levels-${market.sourceMarketId}`} label="层数">
                         <input
+                          className={inputClass}
                           id={`levels-${market.sourceMarketId}`}
                           type="number"
                           min="1"
@@ -534,10 +538,10 @@ export default function ConfigurePage() {
                             })
                           }
                         />
-                      </div>
-                      <div className="field">
-                        <label htmlFor={`spacing-${market.sourceMarketId}`}>层间距 (tick)</label>
+                      </Field>
+                      <Field htmlFor={`spacing-${market.sourceMarketId}`} label="层间距 (tick)">
                         <input
+                          className={inputClass}
                           id={`spacing-${market.sourceMarketId}`}
                           type="number"
                           min="1"
@@ -548,14 +552,15 @@ export default function ConfigurePage() {
                             })
                           }
                         />
-                      </div>
+                      </Field>
                     </div>
                   </article>
                 );
               })}
             </div>
-            <div className="actions">
+            <div className="mt-4 flex flex-wrap items-center gap-2.5">
               <select
+                className={`${inputClass} w-auto`}
                 aria-label="交易模式"
                 value={mode}
                 onChange={(event) => setMode(event.target.value as TradingMode)}
@@ -564,23 +569,16 @@ export default function ConfigurePage() {
                 <option value="shadow">Shadow</option>
                 <option value="live">Live</option>
               </select>
-              <button
-                className="secondary"
-                type="button"
-                disabled={loading || budgetExceeded}
-                onClick={() => void save("save")}
-              >
+              <Button disabled={loading || budgetExceeded} onClick={() => void save("save")} variant="secondary">
                 {makerRunning ? "保存并热更新" : "仅保存配置"}
-              </button>
+              </Button>
               {!makerRunning && (
-                <button
-                  className="primary"
-                  type="button"
+                <Button
                   disabled={loading || preview.markets.length === 0 || budgetExceeded}
                   onClick={() => void save("start")}
                 >
                   保存并启动
-                </button>
+                </Button>
               )}
             </div>
           </section>

@@ -8,6 +8,7 @@ import {
   type LeagueSummary,
   type RuntimeLimits,
 } from "@/lib/api";
+import { Button, errorClass, inputClass, panelClass, successClass } from "./ui";
 import { ExposureBar } from "./ExposureBar";
 
 interface LeagueAutoMakerProps {
@@ -176,65 +177,77 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
   }
 
   return (
-    <section className="leagueDesk">
-      <div className="leagueDeskHead">
+    <section className={`${panelClass} mb-5`}>
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <p className="eyebrow">League discovery</p>
-          <h2>联赛一键做市</h2>
-          <p>
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-gold">
+            League discovery
+          </p>
+          <h2 className="m-0 font-display text-[22px] font-medium tracking-tight">联赛一键做市</h2>
+          <p className="mt-2 max-w-[62ch] text-sm leading-relaxed text-mute">
             从源站拉开放赛程，按队名和时间对齐 Polymarket 全场胜负，只挂一层买一前 1
             tick。方向仍需你确认。
           </p>
         </div>
-        <div className="leagueSwitch" role="tablist" aria-label="选择联赛">
+        <div
+          className="flex rounded-lg border border-line bg-inset p-1"
+          role="tablist"
+          aria-label="选择联赛"
+        >
           {(leagues.length > 0 ? leagues : [{ id: "kpl", shortName: "KPL", name: "KPL" }]).map(
-            (league) => (
-              <button
-                aria-selected={league.id === leagueId}
-                className={league.id === leagueId ? "active" : undefined}
-                key={league.id}
-                onClick={() => selectLeague(league.id)}
-                role="tab"
-                type="button"
-              >
-                {league.shortName}
-              </button>
-            ),
+            (league) => {
+              const active = league.id === leagueId;
+              return (
+                <button
+                  aria-selected={active}
+                  className={`h-8 rounded-md px-3 text-[13px] font-semibold ${
+                    active ? "bg-gold text-on-gold" : "text-mute hover:text-ink"
+                  }`}
+                  key={league.id}
+                  onClick={() => selectLeague(league.id)}
+                  role="tab"
+                  type="button"
+                >
+                  {league.shortName}
+                </button>
+              );
+            },
           )}
         </div>
       </div>
 
-      <div className="leagueToolbar">
-        <div className="leagueMeta">
-          <strong>{activeLeague?.name ?? "King Pro League"}</strong>
-          <span>{activeLeague?.description ?? "王者荣耀职业联赛"}</span>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <strong className="block text-[15px]">{activeLeague?.name ?? "King Pro League"}</strong>
+          <span className="text-sm text-mute">{activeLeague?.description ?? "王者荣耀职业联赛"}</span>
         </div>
-        <button className="primary" disabled={busy} onClick={() => void discover()} type="button">
+        <Button disabled={busy} onClick={() => void discover()}>
           {busy ? "正在扫描…" : result ? `重新扫描 ${activeLeague?.shortName ?? ""}` : "扫描赛程"}
-        </button>
+        </Button>
       </div>
 
-      {error && <div className="error">{error}</div>}
-      {message && <div className="successMessage">{message}</div>}
+      {error && <div className={errorClass}>{error}</div>}
+      {message && <div className={successClass}>{message}</div>}
 
       {result && (
         <>
-          <div className="leagueStats">
-            <div>
-              <span>可配置</span>
-              <b>{result.matched.length}</b>
+          <div className="mb-4 grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-xl border border-line bg-inset px-4 py-3.5">
+              <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">可配置</span>
+              <b className="mt-1.5 block font-display text-xl font-medium">{result.matched.length}</b>
             </div>
-            <div>
-              <span>待复核</span>
-              <b>{result.review.length}</b>
+            <div className="rounded-xl border border-line bg-inset px-4 py-3.5">
+              <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">待复核</span>
+              <b className="mt-1.5 block font-display text-xl font-medium">{result.review.length}</b>
             </div>
-            <div>
-              <span>未匹配</span>
-              <b>{result.rejected.length}</b>
+            <div className="rounded-xl border border-line bg-inset px-4 py-3.5">
+              <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">未匹配</span>
+              <b className="mt-1.5 block font-display text-xl font-medium">{result.rejected.length}</b>
             </div>
-            <label>
+            <label className="rounded-xl border border-line bg-inset px-4 py-3.5 text-[11px] uppercase tracking-[0.16em] text-mute-2">
               每边额度
               <input
+                className={`${inputClass} mt-2`}
                 min="1"
                 onChange={(event) => setOrderNotional(Number(event.target.value))}
                 step="0.5"
@@ -244,88 +257,110 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
             </label>
           </div>
           {limits && (
-            <ExposureBar
-              label="本次预计账户占用"
-              limit={limits.maxAccountNotional}
-              used={estimatedNotional}
-            />
+            <div className="mb-4">
+              <ExposureBar
+                label="本次预计账户占用"
+                limit={limits.maxAccountNotional}
+                used={estimatedNotional}
+              />
+            </div>
           )}
 
           {candidates.length === 0 && (
-            <div className="empty">
+            <div className="rounded-xl border border-dashed border-line px-4 py-8 text-center text-sm text-mute">
               没有可自动启用的 {activeLeague?.shortName}{" "}
               全场盘。查看下方未匹配原因，或改用手动链接。
             </div>
           )}
 
-          <div className="matchTicketList">
+          <div className="grid gap-3">
             {candidates.map((candidate) => {
               const reverse = swapped.has(candidate.sourceMatchId);
               const checked = selected.has(candidate.sourceMatchId);
               const needsReview = Boolean(candidate.reason);
               return (
                 <article
-                  className={`matchTicket ${checked ? "selected" : ""} ${needsReview ? "review" : ""}`}
+                  className={`rounded-[14px] border p-4 ${
+                    checked
+                      ? needsReview
+                        ? "border-amber/45 bg-amber/[0.06]"
+                        : "border-gold/40 bg-gold/[0.06]"
+                      : needsReview
+                        ? "border-amber/30 bg-inset"
+                        : "border-line bg-inset"
+                  }`}
                   key={candidate.sourceMatchId}
                 >
-                  <header className="matchTicketTop">
-                    <label className="leagueCheck">
+                  <header className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                    <label className="flex items-center gap-2.5 text-sm">
                       <input checked={checked} onChange={() => toggle(candidate)} type="checkbox" />
                       <span>
                         {timeLabel(candidate.startTime)}
-                        <small>
+                        <small className="mt-0.5 block text-xs text-mute">
                           {candidate.tournament}
                           {candidate.bestOf ? ` · BO${candidate.bestOf}` : ""}
                         </small>
                       </span>
                     </label>
-                    <em>{pct(candidate.confidence)} 置信</em>
+                    <em className="text-xs not-italic text-mute">{pct(candidate.confidence)} 置信</em>
                   </header>
-                  <div className="matchTicketTeams">
-                    <strong>{candidate.teams[0]}</strong>
-                    <span>VS</span>
-                    <strong>{candidate.teams[1]}</strong>
-                  </div>
-                  {candidate.englishTeams && (
-                    <div className="matchTicketEn">
-                      {candidate.englishTeams[0]} · {candidate.englishTeams[1]}
-                    </div>
-                  )}
-                  <div className="leagueOutcomes">
+                  <div className="grid grid-cols-[1fr_auto_1fr] items-stretch gap-2">
                     {candidate.market.outcomes.map((outcome, index) => {
                       const mapped =
                         candidate.market.outcomes[reverse ? 1 - index : index]
                           ?.suggestedPolymarketOutcome ?? outcome.suggestedPolymarketOutcome;
                       const book = candidate.books[mapped];
                       return (
-                        <div key={outcome.sourceOddId}>
-                          <span>
-                            {outcome.sourceName} → {mapped}
-                          </span>
-                          <b>{cents(book?.topPrice)}</b>
-                          <small>
-                            买一 {cents(book?.bestBid)} / 卖一 {cents(book?.bestAsk)} · 源{" "}
-                            {outcome.decimalOdd.toFixed(2)}
-                          </small>
+                        <div key={outcome.sourceOddId} className="contents">
+                          {index === 1 && (
+                            <div className="grid place-items-center px-1 text-[11px] font-semibold tracking-[0.18em] text-mute-2">
+                              VS
+                            </div>
+                          )}
+                          <div className="rounded-[10px] border border-line bg-raised p-3 text-center">
+                            <strong className="block text-[15px]">{outcome.sourceName}</strong>
+                            {candidate.englishTeams?.[index] && (
+                              <small className="mt-0.5 block text-[11px] text-mute-2">
+                                {candidate.englishTeams[index]}
+                              </small>
+                            )}
+                            <b className="mt-2 block font-display text-2xl font-medium text-gold">
+                              {cents(book?.topPrice)}
+                            </b>
+                            <small className="mt-1 block font-mono text-[11px] text-mute">
+                              源 {outcome.decimalOdd.toFixed(2)} · 买一 {cents(book?.bestBid)} / 卖一{" "}
+                              {cents(book?.bestAsk)}
+                            </small>
+                            <small className="mt-1 block text-[11px] text-mute-2">→ {mapped}</small>
+                          </div>
                         </div>
                       );
                     })}
                   </div>
-                  {candidate.reason && <p className="matchReason">{candidate.reason}</p>}
+                  {candidate.reason && (
+                    <p className="mt-3 mb-0 rounded-lg border border-amber/25 bg-amber/10 px-3 py-2 text-xs text-amber">
+                      {candidate.reason}
+                    </p>
+                  )}
                   {candidate.notes && candidate.notes.length > 0 && (
-                    <ul className="matchNotes">
+                    <ul className="mt-2 mb-0 list-disc pl-5 text-xs text-mute">
                       {candidate.notes.map((note) => (
                         <li key={note}>{note}</li>
                       ))}
                     </ul>
                   )}
-                  <footer className="matchTicketFoot">
-                    <a href={candidate.polymarketUrl} rel="noreferrer" target="_blank">
+                  <footer className="mt-3 flex items-center justify-between gap-3">
+                    <a
+                      className="text-xs font-medium text-mute hover:text-ink"
+                      href={candidate.polymarketUrl}
+                      rel="noreferrer"
+                      target="_blank"
+                    >
                       Polymarket
                     </a>
-                    <button className="swapButton" onClick={() => swap(candidate)} type="button">
+                    <Button onClick={() => swap(candidate)} variant="ghost">
                       交换配对
-                    </button>
+                    </Button>
                   </footer>
                 </article>
               );
@@ -333,24 +368,24 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
           </div>
 
           {result.rejected.length > 0 && (
-            <details className="leagueIssues">
-              <summary>无法匹配 {result.rejected.length} 场</summary>
+            <details className="mt-4 rounded-xl border border-line bg-inset px-4 py-3">
+              <summary className="cursor-pointer text-sm text-mute">
+                无法匹配 {result.rejected.length} 场
+              </summary>
               {result.rejected.map((item) => (
-                <p key={`rejected-${item.sourceMatchId}`}>
+                <p className="mt-2 mb-0 text-sm text-mute" key={`rejected-${item.sourceMatchId}`}>
                   {item.teams.join(" vs ")}：{item.reason}
                 </p>
               ))}
             </details>
           )}
-          <div className="actions">
-            <button
-              className="primary"
+          <div className="mt-4">
+            <Button
               disabled={busy || selectedCandidates.length === 0 || budgetExceeded}
               onClick={() => void saveBatch()}
-              type="button"
             >
               确认配置 {selectedCandidates.length} 场全场
-            </button>
+            </Button>
           </div>
         </>
       )}
