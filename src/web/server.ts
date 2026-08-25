@@ -7,6 +7,7 @@ import { loadConfig, loadMarketMappings } from "../config.js";
 import { createLogger } from "../logger.js";
 import { MarketResolver } from "../polymarket/market-resolver.js";
 import { PolymarketDataApiClient } from "../polymarket/data-api-client.js";
+import { PolymarketOrderBookClient } from "../polymarket/orderbook-client.js";
 import { MatchMetadataClient } from "../source/match-metadata-client.js";
 import {
   deleteMarketConfig,
@@ -17,6 +18,7 @@ import {
   writeMarketConfig,
 } from "./config-writer.js";
 import { LeagueDiscoveryService } from "./league-discovery-service.js";
+import { listPublicLeagues, requireLeague } from "./league-registry.js";
 import { enqueueDeskCommand } from "./desk-commands.js";
 import {
   deleteMatchSession,
