@@ -17,13 +17,25 @@ const market: ResolvedMarket = {
 
 const positions: PositionState = { byToken: new Map(), cash: 100 };
 
-test("95% target return makes both BUY prices sum to about 95 cents", () => {
+test("95% extra rake on a de-vigged book makes both BUY prices sum to 95 cents", () => {
   const prices = complementTargetBuyPrices(0.53, 0.47, 0.95);
   assert.ok(prices);
   const [buyA, buyB] = prices;
-  assert.ok(Math.abs(buyA + buyB - (2 - 1 / 0.95)) < 1e-12);
+  assert.ok(Math.abs(buyA + buyB - 0.95) < 1e-12);
   assert.ok(buyA > 0.5 && buyA < 0.51);
   assert.ok(buyB > 0.44 && buyB < 0.45);
+});
+
+test("keeps source overround then adds 5 points of water", () => {
+  const prices = complementTargetBuyPrices(0.53, 0.47, 0.95, 1.06);
+  assert.ok(prices);
+  const [buyA, buyB] = prices;
+  assert.ok(Math.abs(buyA + buyB - (2 - 1.11)) < 1e-12);
+  const askA = 1 - buyB;
+  const askB = 1 - buyA;
+  assert.ok(Math.abs(askA + askB - 1.11) < 1e-12);
+  assert.ok(buyA < 0.53);
+  assert.ok(buyB < 0.47);
 });
 
 test("5% rake lifts asks above 100¢ and drops complementary buys below 100¢", () => {
@@ -34,7 +46,7 @@ test("5% rake lifts asks above 100¢ and drops complementary buys below 100¢", 
   const askB = 1 - buyA;
   assert.ok(askA + askB > 1);
   assert.ok(buyA + buyB < 1);
-  assert.ok(Math.abs(askA + askB - 1 / 0.95) < 1e-12);
+  assert.ok(Math.abs(askA + askB - 1.05) < 1e-12);
 });
 
 test("converts 80% return-rate asks into complementary BUY-only quotes", () => {
@@ -80,8 +92,8 @@ test("converts 80% return-rate asks into complementary BUY-only quotes", () => {
   assert.deepEqual(
     quotes.map(({ tokenId, side, price }) => ({ tokenId, side, price })),
     [
-      { tokenId: "a", side: "BUY", price: 0.5 },
-      { tokenId: "b", side: "BUY", price: 0.25 },
+      { tokenId: "a", side: "BUY", price: 0.52 },
+      { tokenId: "b", side: "BUY", price: 0.28 },
     ],
   );
   for (const quote of quotes) assert.ok(quote.price * quote.size <= 5 + 1e-9);
@@ -118,6 +130,7 @@ test("95% complementary quotes keep both sides under the source-fair pair", () =
     positions,
     {
       targetReturnRate: 0.95,
+      sourceOverround: 1.06,
       orderNotional: 5,
       maxOutcomePosition: 50,
       maxOrderNotional: 5,
@@ -127,16 +140,20 @@ test("95% complementary quotes keep both sides under the source-fair pair", () =
     },
   );
   assert.deepEqual(
-    quotes.map(({ outcome, side, price }) => ({ outcome, side, price })),
+    quotes.map(({ outcome, side, price }) => ({
+      outcome,
+      side,
+      price: Number(price.toFixed(2)),
+    })),
     [
-      { outcome: "A", side: "BUY", price: 0.5 },
-      { outcome: "B", side: "BUY", price: 0.44 },
+      { outcome: "A", side: "BUY", price: 0.47 },
+      { outcome: "B", side: "BUY", price: 0.41 },
     ],
   );
   const first = quotes[0];
   const second = quotes[1];
   assert.ok(first && second);
-  assert.equal(Number((first.price + second.price).toFixed(2)), 0.94);
+  assert.equal(Number((first.price + second.price).toFixed(2)), 0.88);
 });
 
 test("retreats one tick instead of crossing the best ask", () => {
@@ -225,12 +242,12 @@ test("generates three five-dollar layers per outcome at two-tick spacing", () =>
   assert.deepEqual(
     quotes.map(({ tokenId, price }) => ({ tokenId, price })),
     [
+      { tokenId: "a", price: 0.52 },
       { tokenId: "a", price: 0.5 },
       { tokenId: "a", price: 0.48 },
-      { tokenId: "a", price: 0.46 },
-      { tokenId: "b", price: 0.25 },
-      { tokenId: "b", price: 0.23 },
-      { tokenId: "b", price: 0.21 },
+      { tokenId: "b", price: 0.28 },
+      { tokenId: "b", price: 0.26 },
+      { tokenId: "b", price: 0.24 },
     ],
   );
   for (const quote of quotes) assert.ok(quote.price * quote.size <= 5 + 1e-9);

@@ -16,10 +16,20 @@ export interface ComplementMakerParameters {
   maxAccountNotional: number;
   quoteLevels: number;
   levelSpacingTicks: number;
+  sourceOverround?: number;
 }
 
 export interface TopOfBookMakerParameters extends ComplementMakerParameters {
   minEdge: number;
+}
+
+export function stackedVigAskTotal(
+  targetReturnRate: number,
+  sourceOverround = 1,
+): number | undefined {
+  if (!Number.isFinite(targetReturnRate) || targetReturnRate <= 0) return undefined;
+  if (!Number.isFinite(sourceOverround) || sourceOverround <= 0) return undefined;
+  return sourceOverround + (1 - targetReturnRate);
 }
 
 export function calculateTopOfBookPrice(
@@ -29,14 +39,22 @@ export function calculateTopOfBookPrice(
   tickSize: number,
   targetReturnRate: number,
   minEdge: number,
+  sourceOverround = 1,
 ): number | null {
   const total = fair + oppositeFair;
   const bestBid = book.bids[0]?.price;
   const bestAsk = book.asks[0]?.price;
-  if (!Number.isFinite(total) || total <= 0 || bestBid === undefined || bestAsk === undefined) {
+  const askTotal = stackedVigAskTotal(targetReturnRate, sourceOverround);
+  if (
+    !Number.isFinite(total) ||
+    total <= 0 ||
+    askTotal === undefined ||
+    bestBid === undefined ||
+    bestAsk === undefined
+  ) {
     return null;
   }
-  const oppositeTargetAsk = (oppositeFair / total) * (1 / targetReturnRate);
+  const oppositeTargetAsk = (oppositeFair / total) * askTotal;
   const complementCap = 1 - oppositeTargetAsk;
   const queueTarget = ceilToTick(bestBid + tickSize, tickSize);
   const safeCap = floorToTick(
@@ -58,9 +76,18 @@ export function describeTopOfBookSkip(
   tickSize: number,
   targetReturnRate: number,
   minEdge: number,
+  sourceOverround = 1,
 ): string | null {
   if (
-    calculateTopOfBookPrice(fair, oppositeFair, book, tickSize, targetReturnRate, minEdge) !== null
+    calculateTopOfBookPrice(
+      fair,
+      oppositeFair,
+      book,
+      tickSize,
+      targetReturnRate,
+      minEdge,
+      sourceOverround,
+    ) !== null
   ) {
     return null;
   }
@@ -68,8 +95,9 @@ export function describeTopOfBookSkip(
   const bestAsk = book.asks[0]?.price;
   if (bestBid === undefined || bestAsk === undefined) return "订单簿缺买一或卖一，无法排队";
   const total = fair + oppositeFair;
-  if (!Number.isFinite(total) || total <= 0) return "源公平价无效";
-  const oppositeTargetAsk = (oppositeFair / total) * (1 / targetReturnRate);
+  const askTotal = stackedVigAskTotal(targetReturnRate, sourceOverround);
+  if (!Number.isFinite(total) || total <= 0 || askTotal === undefined) return "源公平价无效";
+  const oppositeTargetAsk = (oppositeFair / total) * askTotal;
   const complementCap = 1 - oppositeTargetAsk;
   const queueTarget = ceilToTick(bestBid + tickSize, tickSize);
   const edgeCap = fair - minEdge;
@@ -101,13 +129,11 @@ export function complementTargetBuyPrices(
   firstFair: number,
   secondFair: number,
   targetReturnRate: number,
+  sourceOverround = 1,
 ): readonly [number, number] | undefined {
   const total = firstFair + secondFair;
-  if (!Number.isFinite(total) || total <= 0 || targetReturnRate <= 0) return undefined;
-  // De-vig first, then apply rake on the ASK side (sum 1/rate > 1). Complementary
-  // BUYs are 1 - oppositeAsk, so they sum to 2 - 1/rate < 1. That is the rake,
-  // not a reversed haircut: paying 95¢ to buy both sides locks ~5¢ if both fill.
-  const askTotal = 1 / targetReturnRate;
+  const askTotal = stackedVigAskTotal(targetReturnRate, sourceOverround);
+  if (!Number.isFinite(total) || total <= 0 || askTotal === undefined) return undefined;
   const firstAsk = (firstFair / total) * askTotal;
   const secondAsk = (secondFair / total) * askTotal;
   if (firstAsk <= 0 || firstAsk >= 1 || secondAsk <= 0 || secondAsk >= 1) return undefined;
@@ -216,6 +242,7 @@ export function generateComplementBuyQuotes(
     firstFair,
     secondFair,
     parameters.targetReturnRate,
+    parameters.sourceOverround ?? 1,
   );
   if (!rawBuyPrices) return [];
   const existingExposure = [...positions.byToken.values()].reduce(
@@ -279,7 +306,11 @@ export function generateTopOfBookBuyQuotes(
   }
   const total = firstFair + secondFair;
   if (!Number.isFinite(total) || total <= 0) return [];
-  const targetAskTotal = 1 / parameters.targetReturnRate;
+  const targetAskTotal = stackedVigAskTotal(
+    parameters.targetReturnRate,
+    parameters.sourceOverround ?? 1,
+  );
+  if (targetAskTotal === undefined) return [];
   const targetAsks = [
     (firstFair / total) * targetAskTotal,
     (secondFair / total) * targetAskTotal,
@@ -307,6 +338,7 @@ export function generateTopOfBookBuyQuotes(
       market.tickSize,
       parameters.targetReturnRate,
       parameters.minEdge,
+      parameters.sourceOverround ?? 1,
     );
     if (queueTarget === null) return;
     const currentPosition = positions.byToken.get(tokenId) ?? 0;

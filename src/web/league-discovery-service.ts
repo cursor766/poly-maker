@@ -120,6 +120,7 @@ function topBookSummary(
                   market.tickSize,
                   targetReturnRate,
                   minEdge + (market.feesEnabled ? 0.005 : 0),
+                  candidate.overround,
                 )
               : null,
         },

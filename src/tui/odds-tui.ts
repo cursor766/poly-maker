@@ -94,11 +94,12 @@ function probabilityBar(probability: number | undefined, width: number): string 
 function makerAskPrices(
   probabilities: readonly number[],
   targetReturnRate: number,
+  sourceOverround = 1,
 ): readonly [number, number] | undefined {
   const firstProbability = probabilities[0];
   const secondProbability = probabilities[1];
   if (firstProbability === undefined || secondProbability === undefined) return undefined;
-  const totalCents = Math.round(100 / targetReturnRate);
+  const totalCents = Math.round(100 * (sourceOverround + (1 - targetReturnRate)));
   const firstCents = Math.round(firstProbability * totalCents);
   const secondCents = totalCents - firstCents;
   if (firstCents <= 0 || firstCents >= 100 || secondCents <= 0 || secondCents >= 100) {
@@ -289,9 +290,12 @@ export class OddsTui {
         left.oddId.localeCompare(right.oddId),
       );
       let normalized: number[] = [];
+      let overround = 1;
       if (legs.length === 2) {
         try {
-          normalized = normalizeDecimalOdds(legs.map((leg) => leg.decimalOdd)).probabilities;
+          const result = normalizeDecimalOdds(legs.map((leg) => leg.decimalOdd));
+          normalized = result.probabilities;
+          overround = result.overround;
         } catch {
           normalized = [];
         }
@@ -333,7 +337,7 @@ export class OddsTui {
       const polymarket = this.polymarketOdds.get(marketMetadata?.round ?? -1);
       const execution = this.execution.get(marketMetadata?.round ?? -1);
       const sourceLocked = state ? state.suspended || !state.visible || !state.open : true;
-      const makerPrices = makerAskPrices(normalized, this.makerTargetReturnRate);
+      const makerPrices = makerAskPrices(normalized, this.makerTargetReturnRate, overround);
       const makerLabel = this.tradingMode === "paper" ? "你的模拟卖价" : "源站目标卖价";
       const makerLine = sourceLocked
         ? `${makerLabel}  已暂停：源站锁盘`

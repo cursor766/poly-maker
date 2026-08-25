@@ -1,3 +1,4 @@
+import { stackedVigAskTotal } from "../strategy/maker.js";
 import { normalizeDecimalOdds } from "../odds/probability.js";
 import type {
   ListedMoneylineMarket,
@@ -54,8 +55,10 @@ function recommendedPrices(
   probabilities: readonly [number, number],
   targetReturnRate: number,
   tickSize: number,
+  sourceOverround = 1,
 ): readonly [number | null, number | null] {
-  const askTotal = 1 / targetReturnRate;
+  const askTotal = stackedVigAskTotal(targetReturnRate, sourceOverround);
+  if (askTotal === undefined) return [null, null];
   const raw = [1 - probabilities[1] * askTotal, 1 - probabilities[0] * askTotal] as const;
   return raw.map((price) => {
     if (!Number.isFinite(price) || price <= 0 || price >= 1) return null;
@@ -287,7 +290,12 @@ export function buildMarkets(
     const suggested = suggestPolymarketOutcomes([first[1], second[1]], polymarket.outcomes);
     const normalized = normalizeDecimalOdds([firstOdd.decimalOdd, secondOdd.decimalOdd]);
     const probabilities = normalized.probabilities as [number, number];
-    const prices = recommendedPrices(probabilities, targetReturnRate, polymarket.tickSize);
+    const prices = recommendedPrices(
+      probabilities,
+      targetReturnRate,
+      polymarket.tickSize,
+      normalized.overround,
+    );
     const line =
       kind === "moneyline" || kind === "child_moneyline" ? null : sourceMarketLine(source);
     previews.push({

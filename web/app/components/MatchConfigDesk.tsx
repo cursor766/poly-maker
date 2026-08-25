@@ -426,7 +426,7 @@ export function MatchConfigDesk({
       }
       await refreshMeta();
       setMessage(
-        `已对 ${selected.length} 个盘口开启自动跟赔：互补买单合计约 ${(autoReturnRate * 100).toFixed(0)}¢（抽水约 ${((1 - autoReturnRate) * 100).toFixed(0)}%）。源站隐含大于 100% 会先去水，不是抽反。`,
+        `已对 ${selected.length} 个盘口开启自动跟赔：保留源站水分后再加 ${((1 - autoReturnRate) * 100).toFixed(0)} 个点。`,
       );
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -558,9 +558,9 @@ export function MatchConfigDesk({
           {title}
         </h1>
         <p className="mt-2.5 max-w-[62ch] text-[15px] leading-relaxed text-mute">
-          勾选全场或小局后直接实盘挂单，不用再到交易台启动核心。自动跟赔会先去掉源站大于 100%
-          的隐含抽水，再按 5% 抽水挂互补买单：卖价合计约 105¢，买价合计约 95¢。买价加到 105¢
-          才会锁亏。也可以继续用小局票上手动一键挂单。
+          勾选全场或小局后直接实盘挂单，不用再到交易台启动核心。自动跟赔会保留源站大于 100%
+          的隐含水分，再额外加 5 个点：卖价合计 = 源隐含 +
+          5¢，互补买价更低。也可以继续用小局票上手动一键挂单。
         </p>
       </header>
 
@@ -694,14 +694,15 @@ export function MatchConfigDesk({
                 开启自动跟赔
               </label>
               <p className="mt-2 mb-3 text-[13px] leading-relaxed text-mute">
-                源站两边 1/赔率 合计通常大于 100%，那是源站抽水。我们先去水，再按目标回报挂
-                <b>买单</b>：{(autoReturnRate * 100).toFixed(0)}% → 卖价合计约{" "}
-                {(100 / autoReturnRate).toFixed(0)}¢，买单合计约 {(autoReturnRate * 100).toFixed(0)}
-                ¢。源赔率变动超过当前挂价后自动改价。
+                源站两边 1/赔率 合计通常大于 100%，这笔水分会保留。目标回报{" "}
+                {(autoReturnRate * 100).toFixed(0)}% 表示再加{" "}
+                {((1 - autoReturnRate) * 100).toFixed(0)} 个点：卖价合计 = 源隐含 +{" "}
+                {((1 - autoReturnRate) * 100).toFixed(0)}
+                ¢，买单合计更低。源赔率变动超过当前挂价后自动改价。
               </p>
               {autoFollow ? (
                 <div className="grid items-end gap-2.5 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-                  <Field htmlFor="auto-return" label="目标回报 %（买单合计）">
+                  <Field htmlFor="auto-return" label="目标回报 %（额外抽水）">
                     <input
                       className={inputClass}
                       id="auto-return"

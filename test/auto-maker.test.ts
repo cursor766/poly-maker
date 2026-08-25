@@ -196,7 +196,7 @@ test("top-of-book mode skips a side when queue price exceeds source cap", () => 
       "a",
       {
         tokenId: "a",
-        bids: [{ price: 0.5, size: 10 }],
+        bids: [{ price: 0.52, size: 10 }],
         asks: [{ price: 0.55, size: 10 }],
         receivedAt: 1,
       },

@@ -625,6 +625,7 @@ export class MakerApp {
         quoteLevels: runtime.mapping.quoteLevels ?? this.config.QUOTE_LEVELS,
         levelSpacingTicks:
           runtime.mapping.levelSpacingTicks ?? this.config.QUOTE_LEVEL_SPACING_TICKS,
+        sourceOverround: fair.overround,
       };
       const quotes =
         runtime.mapping.quoteMode === "top-of-book"
@@ -667,17 +668,18 @@ export class MakerApp {
           runtime.mapping.quoteMode === "top-of-book"
             ? runtime.market.outcomes.flatMap((outcome, index) => {
                 const tokenId = runtime.market.tokenIds[index];
-                const fair = fairByOutcome.get(outcome);
+                const outcomeFair = fairByOutcome.get(outcome);
                 const opposite = fairByOutcome.get(runtime.market.outcomes[1 - index] ?? "");
                 const book = tokenId ? books.get(tokenId) : undefined;
-                if (fair === undefined || opposite === undefined || !book) return [];
+                if (outcomeFair === undefined || opposite === undefined || !book) return [];
                 const note = describeTopOfBookSkip(
-                  fair,
+                  outcomeFair,
                   opposite,
                   book,
                   runtime.market.tickSize,
                   runtime.mapping.targetReturnRate ?? this.runtimeLimits.makerTargetReturnRate,
                   minEdge,
+                  complementParameters.sourceOverround,
                 );
                 return note ? [`${outcome}：${note}`] : [];
               })
