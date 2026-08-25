@@ -44,6 +44,23 @@ test("suggests Polymarket outcomes by team aliases instead of array order", () =
   assert.deepEqual(suggested, ["Talent Gaming", "TOP Esports Armor"]);
 });
 
+test("maps KPL city-prefixed names onto Polymarket English outcomes", () => {
+  assert.deepEqual(
+    previewInternals.suggestPolymarketOutcomes(
+      ["上海EDG.M", "杭州LGD.NBW"],
+      ["LGD NBW", "EDward Gaming"],
+    ),
+    ["EDward Gaming", "LGD NBW"],
+  );
+  assert.deepEqual(
+    previewInternals.suggestPolymarketOutcomes(
+      ["重庆狼队", "长沙TES A"],
+      ["TOP Esports Armor", "Wolves"],
+    ),
+    ["Wolves", "TOP Esports Armor"],
+  );
+});
+
 test("preview only keeps pure winner markets for each round", () => {
   const match = {
     matchId: "match",

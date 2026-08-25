@@ -138,9 +138,10 @@ export default function SignalPage() {
       <p className="eyebrow">LIVE SIGNAL LAB</p>
       <h1>源站信号 → Polymarket 吃单模拟</h1>
       <p className="lead">
-        重大团战源站会先<strong>锁盘</strong>（赔率停更），解锁后才跳价。本页同时盯锁盘窗口与解锁后的第一跳，判断那时去
-        Polymarket 吃单能不能吃到。默认 G1；局结束后可把 Market 改成{" "}
-        <code>lol-jdg-edg-2026-08-07-game2</code>。
+        重大团战源站会先<strong>锁盘</strong>
+        （赔率停更），解锁后才跳价。本页同时盯锁盘窗口与解锁后的第一跳，判断那时去 Polymarket
+        吃单能不能吃到。默认 G1；局结束后可把 Market 改成 <code>lol-jdg-edg-2026-08-07-game2</code>
+        。
       </p>
 
       <section className="panel signalControls">
@@ -150,16 +151,23 @@ export default function SignalPage() {
             <p>默认已填本场 G1；可调跳动阈值、名义金额与滑点。</p>
           </div>
           <div className="signalActions">
-            <StatusPill
-              ok={connected}
-              label={connected ? "SSE 已连接" : "SSE 断开"}
-            />
+            <StatusPill ok={connected} label={connected ? "SSE 已连接" : "SSE 断开"} />
             {snapshot?.running ? (
-              <button className="danger" disabled={loading} onClick={() => void stop()} type="button">
+              <button
+                className="danger"
+                disabled={loading}
+                onClick={() => void stop()}
+                type="button"
+              >
                 停止监听
               </button>
             ) : (
-              <button className="primary" disabled={loading} onClick={() => void start()} type="button">
+              <button
+                className="primary"
+                disabled={loading}
+                onClick={() => void start()}
+                type="button"
+              >
                 开始监听 G1
               </button>
             )}
@@ -222,7 +230,10 @@ export default function SignalPage() {
           <StatusPill ok={!!snapshot?.running} label={snapshot?.running ? "监听中" : "未启动"} />
           <StatusPill ok={!!snapshot?.mqttConnected} label="源站 MQTT" />
           <StatusPill ok={!!snapshot?.polymarketConnected} label="Polymarket WS" />
-          <StatusPill ok={!!snapshot?.sourceBound} label={snapshot?.sourceBound ? "已绑定盘口" : "等待绑定"} />
+          <StatusPill
+            ok={!!snapshot?.sourceBound}
+            label={snapshot?.sourceBound ? "已绑定盘口" : "等待绑定"}
+          />
           <StatusPill
             ok={!snapshot?.sourceLocked}
             label={
@@ -278,9 +289,7 @@ export default function SignalPage() {
           </div>
           <div>
             <span>部分/错过</span>
-            <strong>
-              {(snapshot?.stats.partial ?? 0) + (snapshot?.stats.missed ?? 0)}
-            </strong>
+            <strong>{(snapshot?.stats.partial ?? 0) + (snapshot?.stats.missed ?? 0)}</strong>
           </div>
           <div>
             <span>Poly 平均滞后</span>

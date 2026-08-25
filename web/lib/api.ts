@@ -97,17 +97,29 @@ export interface MarketMapping {
   quoteMode?: "two-sided" | "complement-buy" | "top-of-book";
 }
 
+export interface LeagueSummary {
+  id: string;
+  name: string;
+  shortName: string;
+  description: string;
+  isDefault: boolean;
+}
+
 export interface LeagueCandidate {
+  leagueId?: string;
   sourceMatchId: string;
   eventSlug: string;
   sourceUrl: string;
   polymarketUrl: string;
   teams: [string, string];
+  englishTeams?: [string, string];
   polymarketOutcomes: [string, string];
   tournament: string;
+  bestOf?: number;
   startTime: number;
   polymarketStartTime: number | null;
   confidence: number;
+  notes?: string[];
   reason?: string;
   market: PreviewMarket;
   books: Record<

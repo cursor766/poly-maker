@@ -75,6 +75,7 @@ export default function ConfigurePage() {
   const [mode, setMode] = useState<TradingMode>("shadow");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [manualOpen, setManualOpen] = useState(false);
 
   const refreshSaved = useCallback(async () => {
     const [markets, status, nextLimits] = await Promise.all([
@@ -111,6 +112,7 @@ export default function ConfigurePage() {
       setPolymarketUrl(nextPolymarket);
       setPreview(result);
       setForms(buildForms(result, related));
+      setManualOpen(true);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -246,12 +248,14 @@ export default function ConfigurePage() {
 
   return (
     <>
-      <div className="eyebrow">Market configuration</div>
-      <h1>配置一场比赛的各局盘口</h1>
-      <p className="lead">
-        首次粘贴源站与 Polymarket 链接。之后同一场比赛可从下方列表一键重新打开，切换第一局 /
-        第二局，不必重复粘贴 URL。
-      </p>
+      <div className="pageHero">
+        <p className="eyebrow">Market desk</p>
+        <h1>配置盘口</h1>
+        <p className="lead">
+          先扫 KPL / KGL 赛程批量挂全场，或手动打开一场比赛改局数和层数。默认 paper / shadow，live
+          仍要双重确认。
+        </p>
+      </div>
 
       <LeagueAutoMaker limits={limits} makerRunning={makerRunning} onSaved={refreshSaved} />
 
@@ -303,53 +307,65 @@ export default function ConfigurePage() {
         </section>
       )}
 
-      <section className="panel">
-        <div className="panelTitle">
+      <details
+        className="manualPanel"
+        open={manualOpen}
+        onToggle={(event) => setManualOpen(event.currentTarget.open)}
+      >
+        <summary>
           <div>
-            <h2>{preview ? "当前比赛链接" : "载入新比赛"}</h2>
-            <p>只读取比赛和盘口信息，不会在预览阶段创建订单。</p>
+            <h2>{preview ? "当前比赛链接" : "手动粘贴链接"}</h2>
+            <p>源站比赛页 + Polymarket 事件页。预览只读，不会下单。</p>
           </div>
-          {preview && (
+        </summary>
+        <section className="panel">
+          <div className="panelTitle">
+            <div>
+              <h2>{preview ? "当前比赛链接" : "载入新比赛"}</h2>
+              <p>只读取比赛和盘口信息，不会在预览阶段创建订单。</p>
+            </div>
+            {preview && (
+              <button
+                className="secondary"
+                type="button"
+                disabled={loading}
+                onClick={() => void loadPreview()}
+              >
+                刷新赔率
+              </button>
+            )}
+          </div>
+          <div className="urlGrid">
+            <div className="field">
+              <label htmlFor="source-url">源站比赛 URL</label>
+              <input
+                id="source-url"
+                value={sourceUrl}
+                onChange={(event) => setSourceUrl(event.target.value)}
+                placeholder={sampleSource}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="polymarket-url">Polymarket 事件 URL</label>
+              <input
+                id="polymarket-url"
+                value={polymarketUrl}
+                onChange={(event) => setPolymarketUrl(event.target.value)}
+                placeholder={samplePolymarket}
+              />
+            </div>
             <button
-              className="secondary"
+              className="primary"
               type="button"
-              disabled={loading}
+              disabled={loading || !sourceUrl || !polymarketUrl}
               onClick={() => void loadPreview()}
             >
-              刷新赔率
+              {loading ? "读取中…" : preview ? "重新预览" : "预览市场"}
             </button>
-          )}
-        </div>
-        <div className="urlGrid">
-          <div className="field">
-            <label htmlFor="source-url">源站比赛 URL</label>
-            <input
-              id="source-url"
-              value={sourceUrl}
-              onChange={(event) => setSourceUrl(event.target.value)}
-              placeholder={sampleSource}
-            />
           </div>
-          <div className="field">
-            <label htmlFor="polymarket-url">Polymarket 事件 URL</label>
-            <input
-              id="polymarket-url"
-              value={polymarketUrl}
-              onChange={(event) => setPolymarketUrl(event.target.value)}
-              placeholder={samplePolymarket}
-            />
-          </div>
-          <button
-            className="primary"
-            type="button"
-            disabled={loading || !sourceUrl || !polymarketUrl}
-            onClick={() => void loadPreview()}
-          >
-            {loading ? "读取中…" : preview ? "重新预览" : "预览市场"}
-          </button>
-        </div>
-        {error && <div className="error">{error}</div>}
-      </section>
+          {error && <div className="error">{error}</div>}
+        </section>
+      </details>
 
       {preview && (
         <>

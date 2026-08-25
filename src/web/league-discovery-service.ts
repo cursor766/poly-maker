@@ -3,19 +3,24 @@ import type { PolymarketOrderBookClient } from "../polymarket/orderbook-client.j
 import type { ListedSourceMatch, MatchMetadataClient } from "../source/match-metadata-client.js";
 import { calculateTopOfBookPrice } from "../strategy/maker.js";
 import type { TokenBook } from "../types.js";
+import { isSourceMatchInLeague, requireLeague } from "./league-registry.js";
 import { buildMarkets, type PreviewMarket, teamMatchScore } from "./preview-service.js";
 
 export interface LeagueCandidate {
+  leagueId: string;
   sourceMatchId: string;
   eventSlug: string;
   sourceUrl: string;
   polymarketUrl: string;
   teams: readonly [string, string];
+  englishTeams: readonly [string, string];
   polymarketOutcomes: readonly [string, string];
   tournament: string;
+  bestOf: number;
   startTime: number;
   polymarketStartTime: number | null;
   confidence: number;
+  notes: string[];
   reason?: string;
   market: PreviewMarket;
   books: Record<
@@ -129,12 +134,17 @@ export class LeagueDiscoveryService {
     private readonly minEdge: number,
   ) {}
 
-  async discoverKgl(): Promise<LeagueDiscoveryResult> {
+  async discover(leagueId: string): Promise<LeagueDiscoveryResult> {
+    const league = requireLeague(leagueId);
     const [sourceMatches, events] = await Promise.all([
-      this.metadataClient.listMatches("257561197207055"),
-      this.marketResolver.listActiveMoneylineEvents("kpl-growth-league"),
+      this.metadataClient.listMatches(league.gameId),
+      this.marketResolver.listActiveMoneylineEvents({
+        tagSlug: league.polymarketTagSlug,
+        titlePattern: league.polymarketTitlePattern,
+        searchFallbackQuery: league.polymarketSearchQuery,
+      }),
     ]);
-    const sources = sourceMatches.filter((item) => /KGL|甲级职业联赛/i.test(item.match.tournament));
+    const sources = sourceMatches.filter((item) => isSourceMatchInLeague(item, league));
     const rejected: RejectedLeagueMatch[] = [];
     const review: LeagueCandidate[] = [];
     const matched: LeagueCandidate[] = [];
@@ -219,6 +229,21 @@ export class LeagueDiscoveryService {
             second?.event.startTime === null ||
             secondTimeDelta - timeDelta <= 6 * 3_600_000)) ||
         usedEvents.has(best.event.slug);
+      const notes: string[] = [];
+      if (source.match.bestOf >= 7) {
+        notes.push("BO7：本流程只挂全场。Polymarket 通常只开到 G6，第 7 局不会自动配置。");
+      }
+      const gameRounds = best.event.markets
+        .map((market) => market.round)
+        .filter((round) => round > 0);
+      const highestGame = gameRounds.length > 0 ? Math.max(...gameRounds) : 0;
+      if (source.match.bestOf > highestGame) {
+        notes.push(
+          highestGame === 0
+            ? `源站 BO${source.match.bestOf}，Polymarket 目前只有全场盘。`
+            : `源站 BO${source.match.bestOf}，Polymarket 最高开到 G${highestGame}。`,
+        );
+      }
       const reason = !source.sourceOpen
         ? "源站比赛或盘口当前未开放"
         : !polymarket.tradable
@@ -234,16 +259,20 @@ export class LeagueDiscoveryService {
           (best.event.startTime === null ? 0.85 : timeDelta <= 6 * 3_600_000 ? 1 : 0.9),
       );
       const candidate: LeagueCandidate = {
+        leagueId: league.id,
         sourceMatchId: source.match.matchId,
         eventSlug: best.event.slug,
         sourceUrl: `${this.sourceOrigin.replace(/\/$/, "")}/markets/${source.match.matchId}`,
         polymarketUrl: `https://polymarket.com/event/${best.event.slug}`,
         teams: source.match.teams,
+        englishTeams: source.englishTeams,
         polymarketOutcomes: polymarket.outcomes,
         tournament: source.match.tournament,
+        bestOf: source.match.bestOf,
         startTime: source.startTime,
         polymarketStartTime: best.event.startTime,
         confidence,
+        notes,
         ...(reason ? { reason } : {}),
         market: preview,
         books: summary,
@@ -253,6 +282,10 @@ export class LeagueDiscoveryService {
       else matched.push(candidate);
     }
     return { discoveredAt: Date.now(), matched, review, rejected };
+  }
+
+  async discoverKgl(): Promise<LeagueDiscoveryResult> {
+    return this.discover("kgl");
   }
 }
 

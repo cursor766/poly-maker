@@ -17,6 +17,7 @@ import {
   writeMarketConfig,
 } from "./config-writer.js";
 import { LeagueDiscoveryService } from "./league-discovery-service.js";
+import { listPublicLeagues, requireLeague } from "./league-registry.js";
 import {
   deleteMatchSession,
   listMatchSessions,
@@ -145,11 +146,18 @@ const server = createServer(async (request, response) => {
       sendJson(response, 200, await previewService.preview(body.sourceUrl, body.polymarketUrl));
       return;
     }
-    if (request.method === "GET" && url.pathname === "/api/leagues/kgl/discover") {
-      sendJson(response, 200, await leagueDiscoveryService.discoverKgl());
+    if (request.method === "GET" && url.pathname === "/api/leagues") {
+      sendJson(response, 200, { leagues: listPublicLeagues() });
       return;
     }
-    if (request.method === "POST" && url.pathname === "/api/leagues/kgl/config") {
+    const leagueDiscover = /^\/api\/leagues\/([^/]+)\/discover$/.exec(url.pathname);
+    if (request.method === "GET" && leagueDiscover?.[1]) {
+      sendJson(response, 200, await leagueDiscoveryService.discover(leagueDiscover[1]));
+      return;
+    }
+    const leagueConfig = /^\/api\/leagues\/([^/]+)\/config$/.exec(url.pathname);
+    if (request.method === "POST" && leagueConfig?.[1]) {
+      requireLeague(leagueConfig[1]);
       const body = saveBatchMarketConfigSchema.parse(await readJson(request));
       const mappings = await writeBatchMarketConfigs(body, config.MARKETS_CONFIG_PATH);
       for (const match of body.matches) {

@@ -1,31 +1,33 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import { IBM_Plex_Mono, IBM_Plex_Sans } from "next/font/google";
 import type { ReactNode } from "react";
+import { TopNav } from "./components/TopNav";
 import "./globals.css";
 
+const sans = IBM_Plex_Sans({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
+  variable: "--font-sans",
+  display: "swap",
+});
+
+const mono = IBM_Plex_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
+  variable: "--font-mono",
+  display: "swap",
+});
+
 export const metadata: Metadata = {
-  title: "Poly Maker Control",
-  description: "Polymarket 做市控制面板",
+  title: "Poly Maker",
+  description: "王者荣耀 KPL / KGL Polymarket 做市控制台",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="zh-CN">
+    <html className={`${sans.variable} ${mono.variable}`} lang="zh-CN">
       <body>
-        <header className="topbar">
-          <Link className="brand" href="/">
-            <span className="brandMark">PM</span>
-            <span>
-              Poly Maker
-              <small>CONTROL DESK</small>
-            </span>
-          </Link>
-          <nav>
-            <Link href="/">市场配置</Link>
-            <Link href="/signal">信号吃单</Link>
-            <Link href="/dashboard">运行看板</Link>
-          </nav>
-        </header>
+        <TopNav />
         <main className="shell">{children}</main>
       </body>
     </html>

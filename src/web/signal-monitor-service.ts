@@ -363,7 +363,9 @@ export class SignalMonitorService {
   }
 
   private async resolvePolymarket(): Promise<void> {
-    const markets = await this.marketResolver.listMoneylineMarkets(this.options.polymarketEventSlug);
+    const markets = await this.marketResolver.listMoneylineMarkets(
+      this.options.polymarketEventSlug,
+    );
     const market =
       markets.find((item) => item.slug === this.options.polymarketMarketSlug) ??
       markets.find((item) => item.round === 1);
@@ -555,12 +557,8 @@ export class SignalMonitorService {
       sourceFair: this.sourceFairs[0] ?? 0,
       sourceDelta: 0,
       polyMidAtSignal: this.polyMids[0],
-      polyAskAtSignal: this.tokenIds
-        ? (this.books.get(this.tokenIds[0])?.ask ?? null)
-        : null,
-      polyBidAtSignal: this.tokenIds
-        ? (this.books.get(this.tokenIds[0])?.bid ?? null)
-        : null,
+      polyAskAtSignal: this.tokenIds ? (this.books.get(this.tokenIds[0])?.ask ?? null) : null,
+      polyBidAtSignal: this.tokenIds ? (this.books.get(this.tokenIds[0])?.bid ?? null) : null,
       polyMidAtLock: this.unlockMeta.polyAtLock[0],
       polyMovedDuringLock:
         this.polyMids[0] !== null && this.unlockMeta.polyAtLock[0] !== null
@@ -628,8 +626,7 @@ export class SignalMonitorService {
         this.books.get(this.tokenIds[0])?.bid ?? null,
       ),
       verdict: "lock_watch",
-      reason:
-        "重大事件锁盘：源站赔率停更。此时应看直播方向，并观察 Polymarket 是否仍可交易。",
+      reason: "重大事件锁盘：源站赔率停更。此时应看直播方向，并观察 Polymarket 是否仍可交易。",
       polyMovedAt: null,
       polyLagMs: null,
       polyMidAfter: null,
@@ -696,12 +693,7 @@ export class SignalMonitorService {
     this.publish();
   }
 
-  private applyOdd(
-    marketId: string,
-    oddId: string,
-    decimalOdd: number,
-    detectJump: boolean,
-  ): void {
+  private applyOdd(marketId: string, oddId: string, decimalOdd: number, detectJump: boolean): void {
     let marketOdds = this.oddsByMarket.get(marketId);
     if (!marketOdds) {
       marketOdds = new Map();
@@ -751,10 +743,14 @@ export class SignalMonitorService {
     const delta = best.next - best.prev;
     if (Math.abs(delta) < this.options.jumpThreshold) return;
 
-    const buyIndex = (delta > 0 ? best.index : ((1 - best.index) as 0 | 1));
+    const buyIndex = delta > 0 ? best.index : ((1 - best.index) as 0 | 1);
     const buyFair = buyIndex === 0 ? fairA : fairB;
     const buyPrev =
-      buyIndex === best.index ? best.prev : buyIndex === 0 ? (prevA ?? 1 - best.prev) : (prevB ?? 1 - best.prev);
+      buyIndex === best.index
+        ? best.prev
+        : buyIndex === 0
+          ? (prevA ?? 1 - best.prev)
+          : (prevB ?? 1 - best.prev);
     this.enqueueJump(buyIndex, buyPrev, buyFair);
   }
 
@@ -785,10 +781,7 @@ export class SignalMonitorService {
     if (/handicap|spread|total|over|under|kill|回合|让分|大小/.test(normalized)) {
       return false;
     }
-    return (
-      /^@t[12]$/i.test(normalized) ||
-      /jd|jdg|edward|edg|gaming/.test(normalized)
-    );
+    return /^@t[12]$/i.test(normalized) || /jd|jdg|edward|edg|gaming/.test(normalized);
   }
 
   private isHandicapName(name: string | undefined): boolean {
@@ -836,7 +829,7 @@ export class SignalMonitorService {
       if (odds.size < 2) continue;
       const entries = [...odds.entries()];
       // Prefer exact two-odd markets; otherwise search pairs.
-      const pairs: Array<[typeof entries[number], typeof entries[number]]> = [];
+      const pairs: Array<[(typeof entries)[number], (typeof entries)[number]]> = [];
       if (entries.length === 2) {
         pairs.push([entries[0]!, entries[1]!]);
       } else {
@@ -1042,7 +1035,9 @@ export class SignalMonitorService {
     if (!extra.bypassCooldown && now - this.lastSignalAt < this.options.cooldownMs) return;
     const delta = nextFair - prevFair;
     const minJump =
-      extra.kind === "unlock" ? this.options.jumpThreshold * 0.25 : this.options.jumpThreshold * 0.5;
+      extra.kind === "unlock"
+        ? this.options.jumpThreshold * 0.25
+        : this.options.jumpThreshold * 0.5;
     if (Math.abs(delta) < minJump && extra.kind !== "unlock") return;
 
     this.lastSignalAt = now;

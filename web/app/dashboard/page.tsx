@@ -96,8 +96,8 @@ export default function DashboardPage() {
     <div className="tradingDesk">
       <header className="deskHero">
         <div>
-          <div className="eyebrow">Realtime maker operations</div>
-          <h1>做市交易台</h1>
+          <div className="eyebrow">Live book</div>
+          <h1>交易台</h1>
           <div className="connectionRow">
             <StatusPill
               ok={running}

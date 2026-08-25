@@ -1,10 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   api,
   type LeagueCandidate,
   type LeagueDiscoveryResult,
+  type LeagueSummary,
   type RuntimeLimits,
 } from "@/lib/api";
 import { ExposureBar } from "./ExposureBar";
@@ -22,15 +23,22 @@ function timeLabel(value: number): string {
         day: "2-digit",
         hour: "2-digit",
         minute: "2-digit",
+        weekday: "short",
       })
     : "时间待定";
 }
 
-function cents(value: number | null): string {
-  return value === null ? "—" : `${(value * 100).toFixed(0)}¢`;
+function cents(value: number | null | undefined): string {
+  return value === null || value === undefined ? "—" : `${(value * 100).toFixed(0)}¢`;
+}
+
+function pct(value: number): string {
+  return `${(value * 100).toFixed(0)}%`;
 }
 
 export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMakerProps) {
+  const [leagues, setLeagues] = useState<LeagueSummary[]>([]);
+  const [leagueId, setLeagueId] = useState("kpl");
   const [result, setResult] = useState<LeagueDiscoveryResult | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [swapped, setSwapped] = useState<Set<string>>(new Set());
@@ -39,6 +47,7 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
+  const activeLeague = leagues.find((league) => league.id === leagueId) ?? leagues[0];
   const candidates = result?.matched ?? [];
   const selectedCandidates = useMemo(
     () => candidates.filter((candidate) => selected.has(candidate.sourceMatchId)),
@@ -47,12 +56,24 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
   const estimatedNotional = selectedCandidates.length * orderNotional * 2;
   const budgetExceeded = limits !== null && estimatedNotional > limits.maxAccountNotional + 1e-9;
 
-  async function discover() {
+  useEffect(() => {
+    void api<{ leagues: LeagueSummary[] }>("/api/leagues")
+      .then((payload) => {
+        setLeagues(payload.leagues);
+        const fallback = payload.leagues.find((league) => league.isDefault) ?? payload.leagues[0];
+        if (fallback) setLeagueId(fallback.id);
+      })
+      .catch((caught) => {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      });
+  }, []);
+
+  async function discover(nextLeagueId = leagueId) {
     setBusy(true);
     setError("");
     setMessage("");
     try {
-      const next = await api<LeagueDiscoveryResult>("/api/leagues/kgl/discover");
+      const next = await api<LeagueDiscoveryResult>(`/api/leagues/${nextLeagueId}/discover`);
       setResult(next);
       setSelected(new Set(next.matched.map((candidate) => candidate.sourceMatchId)));
       setSwapped(new Set());
@@ -61,6 +82,15 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
     } finally {
       setBusy(false);
     }
+  }
+
+  function selectLeague(nextId: string) {
+    setLeagueId(nextId);
+    setResult(null);
+    setSelected(new Set());
+    setSwapped(new Set());
+    setMessage("");
+    setError("");
   }
 
   function toggle(candidate: LeagueCandidate) {
@@ -84,13 +114,13 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
   async function saveBatch() {
     if (selectedCandidates.length === 0 || !limits) return;
     const confirmed = window.confirm(
-      `将一次配置 ${selectedCandidates.length} 场 KGL 全场胜负，每边只挂一层、每层 $${orderNotional.toFixed(2)}。确认继续？`,
+      `将配置 ${selectedCandidates.length} 场 ${activeLeague?.shortName ?? "联赛"} 全场胜负，每边一层、每层 $${orderNotional.toFixed(2)}。确认继续？`,
     );
     if (!confirmed) return;
     setBusy(true);
     setError("");
     try {
-      await api("/api/leagues/kgl/config", {
+      await api(`/api/leagues/${leagueId}/config`, {
         method: "POST",
         body: JSON.stringify({
           matches: selectedCandidates.map((candidate) => {
@@ -129,8 +159,8 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
       await onSaved();
       setMessage(
         makerRunning
-          ? "批量配置已保存，交易核心正在热加载。"
-          : "批量配置已保存，可前往交易台启动核心。",
+          ? "批量配置已写入，交易核心正在热加载。"
+          : "批量配置已写入，可到交易台启动核心。",
       );
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -140,15 +170,41 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
   }
 
   return (
-    <section className="panel leaguePanel">
-      <div className="panelTitle">
+    <section className="leagueDesk">
+      <div className="leagueDeskHead">
         <div>
-          <div className="eyebrow">KGL batch discovery</div>
-          <h2>KGL 一键自动做市</h2>
-          <p>自动匹配源站与 Polymarket，只配置全场胜负，并抢最高买价前 1 tick。</p>
+          <p className="eyebrow">League discovery</p>
+          <h2>联赛一键做市</h2>
+          <p>
+            从源站拉开放赛程，按队名和时间对齐 Polymarket 全场胜负，只挂一层买一前 1
+            tick。方向仍需你确认。
+          </p>
         </div>
-        <button className="primary" type="button" disabled={busy} onClick={discover}>
-          {busy ? "发现中…" : result ? "重新发现" : "一键发现 KGL"}
+        <div className="leagueSwitch" role="tablist" aria-label="选择联赛">
+          {(leagues.length > 0 ? leagues : [{ id: "kpl", shortName: "KPL", name: "KPL" }]).map(
+            (league) => (
+              <button
+                aria-selected={league.id === leagueId}
+                className={league.id === leagueId ? "active" : undefined}
+                key={league.id}
+                onClick={() => selectLeague(league.id)}
+                role="tab"
+                type="button"
+              >
+                {league.shortName}
+              </button>
+            ),
+          )}
+        </div>
+      </div>
+
+      <div className="leagueToolbar">
+        <div className="leagueMeta">
+          <strong>{activeLeague?.name ?? "King Pro League"}</strong>
+          <span>{activeLeague?.description ?? "王者荣耀职业联赛"}</span>
+        </div>
+        <button className="primary" disabled={busy} onClick={() => void discover()} type="button">
+          {busy ? "正在扫描…" : result ? `重新扫描 ${activeLeague?.shortName ?? ""}` : "扫描赛程"}
         </button>
       </div>
 
@@ -157,54 +213,77 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
 
       {result && (
         <>
-          <div className="leagueSummary">
-            <span>
-              可安全配置 <b>{result.matched.length}</b>
-            </span>
-            <span>
-              需人工处理 <b>{result.review.length}</b>
-            </span>
-            <span>
-              无法匹配 <b>{result.rejected.length}</b>
-            </span>
+          <div className="leagueStats">
+            <div>
+              <span>可配置</span>
+              <b>{result.matched.length}</b>
+            </div>
+            <div>
+              <span>待复核</span>
+              <b>{result.review.length}</b>
+            </div>
+            <div>
+              <span>未匹配</span>
+              <b>{result.rejected.length}</b>
+            </div>
             <label>
-              每边额度 $
+              每边额度
               <input
-                type="number"
                 min="1"
-                step="0.5"
-                value={orderNotional}
                 onChange={(event) => setOrderNotional(Number(event.target.value))}
+                step="0.5"
+                type="number"
+                value={orderNotional}
               />
             </label>
           </div>
           {limits && (
             <ExposureBar
-              used={estimatedNotional}
-              limit={limits.maxAccountNotional}
               label="本次预计账户占用"
+              limit={limits.maxAccountNotional}
+              used={estimatedNotional}
             />
           )}
 
-          <div className="leagueCandidateList">
+          {candidates.length === 0 && (
+            <div className="empty">
+              没有可自动启用的 {activeLeague?.shortName}{" "}
+              全场盘。查看下方未匹配原因，或改用手动链接。
+            </div>
+          )}
+
+          <div className="matchTicketList">
             {candidates.map((candidate) => {
               const reverse = swapped.has(candidate.sourceMatchId);
+              const checked = selected.has(candidate.sourceMatchId);
               return (
-                <article className="leagueCandidate" key={candidate.sourceMatchId}>
-                  <label className="leagueCheck">
-                    <input
-                      type="checkbox"
-                      checked={selected.has(candidate.sourceMatchId)}
-                      onChange={() => toggle(candidate)}
-                    />
-                    <span>
-                      <strong>{candidate.teams.join(" vs ")}</strong>
-                      <small>
-                        {timeLabel(candidate.startTime)} · 匹配置信度{" "}
-                        {(candidate.confidence * 100).toFixed(0)}%
-                      </small>
-                    </span>
-                  </label>
+                <article
+                  className={`matchTicket ${checked ? "selected" : ""}`}
+                  key={candidate.sourceMatchId}
+                >
+                  <header className="matchTicketTop">
+                    <label className="leagueCheck">
+                      <input checked={checked} onChange={() => toggle(candidate)} type="checkbox" />
+                      <span>
+                        {timeLabel(candidate.startTime)}
+                        <small>
+                          {candidate.tournament}
+                          {candidate.bestOf ? ` · BO${candidate.bestOf}` : ""}
+                        </small>
+                      </span>
+                    </label>
+                    <em>{pct(candidate.confidence)} 置信</em>
+                  </header>
+                  <div className="matchTicketTeams">
+                    <strong>{candidate.teams[0]}</strong>
+                    <span>VS</span>
+                    <strong>{candidate.teams[1]}</strong>
+                  </div>
+                  {candidate.englishTeams && (
+                    <div className="matchTicketEn">
+                      {candidate.englishTeams[0]} · {candidate.englishTeams[1]}
+                    </div>
+                  )}
                   <div className="leagueOutcomes">
                     {candidate.market.outcomes.map((outcome, index) => {
                       const mapped =
@@ -216,18 +295,30 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
                           <span>
                             {outcome.sourceName} → {mapped}
                           </span>
-                          <b>{cents(book?.topPrice ?? null)}</b>
+                          <b>{cents(book?.topPrice)}</b>
                           <small>
-                            买一 {cents(book?.bestBid ?? null)} / 卖一{" "}
-                            {cents(book?.bestAsk ?? null)}
+                            买一 {cents(book?.bestBid)} / 卖一 {cents(book?.bestAsk)} · 源{" "}
+                            {outcome.decimalOdd.toFixed(2)}
                           </small>
                         </div>
                       );
                     })}
                   </div>
-                  <button className="swapButton" type="button" onClick={() => swap(candidate)}>
-                    交换配对
-                  </button>
+                  {candidate.notes && candidate.notes.length > 0 && (
+                    <ul className="matchNotes">
+                      {candidate.notes.map((note) => (
+                        <li key={note}>{note}</li>
+                      ))}
+                    </ul>
+                  )}
+                  <footer className="matchTicketFoot">
+                    <a href={candidate.polymarketUrl} rel="noreferrer" target="_blank">
+                      Polymarket
+                    </a>
+                    <button className="swapButton" onClick={() => swap(candidate)} type="button">
+                      交换配对
+                    </button>
+                  </footer>
                 </article>
               );
             })}
@@ -235,7 +326,7 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
 
           {(result.review.length > 0 || result.rejected.length > 0) && (
             <details className="leagueIssues">
-              <summary>查看未自动启用的比赛</summary>
+              <summary>未自动启用 {result.review.length + result.rejected.length} 场</summary>
               {result.review.map((candidate) => (
                 <p key={`review-${candidate.sourceMatchId}`}>
                   {candidate.teams.join(" vs ")}：{candidate.reason}
@@ -251,11 +342,11 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
           <div className="actions">
             <button
               className="primary"
-              type="button"
               disabled={busy || selectedCandidates.length === 0 || budgetExceeded}
-              onClick={saveBatch}
+              onClick={() => void saveBatch()}
+              type="button"
             >
-              确认并批量配置 {selectedCandidates.length} 场
+              确认配置 {selectedCandidates.length} 场全场
             </button>
           </div>
         </>

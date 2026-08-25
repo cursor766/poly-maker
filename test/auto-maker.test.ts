@@ -92,6 +92,35 @@ test("lists paginated active Polymarket league moneylines", async () => {
   assert.equal(events[0]?.markets[0]?.tradable, true);
 });
 
+test("filters honor-of-kings tag events by league title", async () => {
+  const resolver = new MarketResolver("https://gamma.example", async () => {
+    return new Response(
+      JSON.stringify([
+        {
+          slug: "hok-edg-lgd-2026-08-27",
+          title: "Honor of Kings: EDward Gaming vs LGD NBW (BO7) - King Pro League Playoffs",
+          startTime: "2026-08-27T10:30:00Z",
+          markets: [{ ...gammaMarket, slug: "hok-edg-lgd-2026-08-27" }],
+        },
+        {
+          slug: "hok-bmg-one-2026-08-23",
+          title: "Honor of Kings: BanMei Gaming vs ONE Team (BO5) - Garena Challenger Series",
+          startTime: "2026-08-23T10:00:00Z",
+          markets: [{ ...gammaMarket, slug: "hok-bmg-one-2026-08-23" }],
+        },
+      ]),
+      { status: 200 },
+    );
+  });
+  const events = await resolver.listActiveMoneylineEvents({
+    tagSlug: "honor-of-kings",
+    titlePattern: /King Pro League/i,
+    searchFallbackQuery: "King Pro League",
+  });
+  assert.equal(events.length, 1);
+  assert.equal(events[0]?.slug, "hok-edg-lgd-2026-08-27");
+});
+
 test("top-of-book mode improves best bid by one tick within source caps", () => {
   const market: ResolvedMarket = {
     slug: "event",
@@ -262,6 +291,7 @@ test("league pairing uses both team names and rejects array-order guessing", () 
     startTime: Date.now(),
     status: 5,
     sourceOpen: true,
+    tournamentId: "581112559764744",
   };
   const event = {
     slug: "event",
