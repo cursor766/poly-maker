@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { GameTicket } from "@/app/components/GameTicket";
 import {
@@ -24,6 +23,7 @@ import {
   type TradingMode,
 } from "@/lib/api";
 import { estimateMarketBudget } from "@/lib/budget";
+import { ensureMakerRunning, MATCH_DESK_MODE } from "@/lib/maker-session";
 import { subscribeToStatus } from "@/lib/stream";
 
 interface MarketForm {
@@ -69,19 +69,16 @@ function expandBuyQuotes(
   return quotes;
 }
 
-async function waitForRuntimeMarket(sourceMarketId: string, timeoutMs = 15_000) {
+async function waitForRuntimeMarket(sourceMarketId: string, timeoutMs = 20_000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     const status = await api<ControlStatus>("/api/status");
-    if (!status.process.running) {
-      throw new Error("交易核心已停止。请先启动，然后再点一键挂单。");
-    }
     if (status.runtime?.markets.some((market) => market.sourceMarketId === sourceMarketId)) {
-      return;
+      return status;
     }
     await new Promise((resolve) => setTimeout(resolve, 400));
   }
-  throw new Error("核心还没加载这个小局。请确认已保存并启动，稍后再点一键挂单。");
+  throw new Error("这个小局还没加载进挂单进程。稍后再试。");
 }
 
 function isGameMarket(market: MarketPreview["markets"][number]): boolean {
@@ -159,14 +156,13 @@ export function MatchConfigDesk({
   sourceUrl: string;
   polymarketUrl: string;
 }) {
-  const router = useRouter();
   const [preview, setPreview] = useState<MarketPreview | null>(null);
   const [forms, setForms] = useState<Record<string, MarketForm>>({});
   const [makerRunning, setMakerRunning] = useState(false);
   const [runtimeMarkets, setRuntimeMarkets] = useState<Record<string, RuntimeMarket>>({});
   const [tape, setTape] = useState<Record<string, MarketTapeSnapshot>>({});
   const [limits, setLimits] = useState<RuntimeLimits | null>(null);
-  const [mode, setMode] = useState<TradingMode>("shadow");
+  const [mode, setMode] = useState<TradingMode>(MATCH_DESK_MODE);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -174,12 +170,7 @@ export function MatchConfigDesk({
   const [autoReturnRate, setAutoReturnRate] = useState(0.95);
   const [autoNotional, setAutoNotional] = useState(5);
 
-  const refreshMeta = useCallback(async () => {
-    const [markets, status, nextLimits] = await Promise.all([
-      api<{ mappings: MarketMapping[] }>("/api/markets"),
-      api<ControlStatus>("/api/status"),
-      api<RuntimeLimits>("/api/limits"),
-    ]);
+  const applyStatus = useCallback((status: ControlStatus) => {
     setMakerRunning(status.process.running);
     setRuntimeMarkets(
       Object.fromEntries(
@@ -187,9 +178,18 @@ export function MatchConfigDesk({
       ),
     );
     if (status.runtime?.mode) setMode(status.runtime.mode);
+  }, []);
+
+  const refreshMeta = useCallback(async () => {
+    const [markets, status, nextLimits] = await Promise.all([
+      api<{ mappings: MarketMapping[] }>("/api/markets"),
+      api<ControlStatus>("/api/status"),
+      api<RuntimeLimits>("/api/limits"),
+    ]);
+    applyStatus(status);
     setLimits(nextLimits);
     return { mappings: markets.mappings, limits: nextLimits };
-  }, []);
+  }, [applyStatus]);
 
   const loadPreview = useCallback(async () => {
     setLoading(true);
@@ -219,19 +219,8 @@ export function MatchConfigDesk({
   }, [loadPreview]);
 
   useEffect(() => {
-    return subscribeToStatus(
-      (status) => {
-        setMakerRunning(status.process.running);
-        setRuntimeMarkets(
-          Object.fromEntries(
-            (status.runtime?.markets ?? []).map((item) => [item.sourceMarketId, item]),
-          ),
-        );
-        if (status.runtime?.mode) setMode(status.runtime.mode);
-      },
-      () => undefined,
-    );
-  }, []);
+    return subscribeToStatus(applyStatus, () => undefined);
+  }, [applyStatus]);
 
   useEffect(() => {
     const gameMarkets = (preview?.markets ?? []).filter(
@@ -357,6 +346,16 @@ export function MatchConfigDesk({
     await refreshMeta();
   }
 
+  async function persistAndQuote(nextForms = forms) {
+    if (!preview) return;
+    await persistConfig(nextForms);
+    const enabled = preview.markets.some(
+      (market) => market.tradable && nextForms[market.sourceMarketId]?.enabled,
+    );
+    if (!enabled) return;
+    applyStatus(await ensureMakerRunning(MATCH_DESK_MODE));
+  }
+
   async function resumeAutoMarket(sourceMarketId: string) {
     await waitForRuntimeMarket(sourceMarketId);
     await api("/api/desk/command", {
@@ -384,17 +383,15 @@ export function MatchConfigDesk({
     setError("");
     setMessage("");
     try {
-      await persistConfig(nextForms);
-      if (makerRunning) {
-        if (enabled) await resumeAutoMarket(market.sourceMarketId);
-        else {
-          await api("/api/desk/command", {
-            method: "POST",
-            body: JSON.stringify({ action: "cancel", sourceMarketId: market.sourceMarketId }),
-          });
-        }
-        await refreshMeta();
+      await persistAndQuote(nextForms);
+      if (enabled) await resumeAutoMarket(market.sourceMarketId);
+      else if (makerRunning) {
+        await api("/api/desk/command", {
+          method: "POST",
+          body: JSON.stringify({ action: "cancel", sourceMarketId: market.sourceMarketId }),
+        });
       }
+      await refreshMeta();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -423,21 +420,7 @@ export function MatchConfigDesk({
     setError("");
     setMessage("");
     try {
-      await persistConfig(nextForms);
-      const startMode = mode === "shadow" ? "paper" : mode;
-      if (!makerRunning) {
-        if (startMode === "live") {
-          const confirmed = window.confirm(
-            "你将启动真实交易。系统会使用 .env 中的钱包并实际挂单。确认继续？",
-          );
-          if (!confirmed) return;
-        }
-        await api("/api/start", {
-          method: "POST",
-          body: JSON.stringify({ mode: startMode }),
-        });
-        setMode(startMode);
-      }
+      await persistAndQuote(nextForms);
       for (const market of selected) {
         await resumeAutoMarket(market.sourceMarketId);
       }
@@ -501,11 +484,7 @@ export function MatchConfigDesk({
         },
       };
       setForms(nextForms);
-      await persistConfig(nextForms);
-      if (!makerRunning) {
-        setError("已启用该小局。请先保存并启动核心，然后再点一键挂单。");
-        return;
-      }
+      await persistAndQuote(nextForms);
       await waitForRuntimeMarket(market.sourceMarketId);
       await api("/api/desk/command", {
         method: "POST",
@@ -521,12 +500,7 @@ export function MatchConfigDesk({
         const live = status.runtime?.markets.find(
           (item) => item.sourceMarketId === market.sourceMarketId,
         );
-        setMakerRunning(status.process.running);
-        setRuntimeMarkets(
-          Object.fromEntries(
-            (status.runtime?.markets ?? []).map((item) => [item.sourceMarketId, item]),
-          ),
-        );
+        applyStatus(status);
         if (live && (live.openOrderCount > 0 || live.quoteMode === "manual")) break;
         await new Promise((resolve) => setTimeout(resolve, 300));
       }
@@ -538,25 +512,21 @@ export function MatchConfigDesk({
     }
   }
 
-  async function save(action: "save" | "start") {
+  async function save() {
     if (!preview) return;
-    if (action === "start" && mode === "live") {
-      const confirmed = window.confirm(
-        "你将启动真实交易。系统会使用 .env 中的钱包并实际挂单，锁盘或停止时会撤单。确认继续？",
-      );
-      if (!confirmed) return;
-    }
     setLoading(true);
     setError("");
+    setMessage("");
     try {
-      await persistConfig();
-      if (action === "start") {
-        await api("/api/start", {
-          method: "POST",
-          body: JSON.stringify({ mode }),
-        });
-        router.push("/dashboard");
-        return;
+      const wasRunning = makerRunning;
+      await persistAndQuote();
+      const enabledCount = Object.values(forms).filter((form) => form.enabled).length;
+      if (enabledCount === 0) {
+        setMessage("配置已保存。勾选盘口后会自动开始实盘挂单。");
+      } else if (wasRunning) {
+        setMessage("配置已保存，挂单参数已热更新。");
+      } else {
+        setMessage("配置已保存，正在实盘挂单。");
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -588,7 +558,7 @@ export function MatchConfigDesk({
           {title}
         </h1>
         <p className="mt-2.5 max-w-[62ch] text-[15px] leading-relaxed text-mute">
-          勾选全场或小局。开启自动跟赔后，核心按源公平价双边挂单，两买价合计约为源赔率的
+          勾选全场或小局后直接实盘挂单，不用再到交易台启动核心。开启自动跟赔后按源公平价双边挂单，两买价合计约为源赔率的
           95%；源目标价偏离当前挂价后自动改挂。也可以继续用小局票上手动一键挂单。
         </p>
       </header>
@@ -639,7 +609,7 @@ export function MatchConfigDesk({
               <div>
                 <h2 className="m-0 text-lg font-medium">盘口与挂单参数</h2>
                 <p className="mt-1.5 text-sm leading-relaxed text-mute">
-                  全场仍用参数卡。小局票可以手动挂，也可以勾选后按源赔率自动双边跟价。
+                  全场仍用参数卡。小局票可以手动挂，也可以勾选后按源赔率自动双边跟价。保存或启动自动跟赔后会直接挂单。
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -723,7 +693,7 @@ export function MatchConfigDesk({
                 开启自动跟赔
               </label>
               <p className="mt-2 mb-3 text-[13px] leading-relaxed text-mute">
-                勾选全场或小局后点启动。核心按源公平价双边买入，两价合计约为源赔率的{" "}
+                勾选全场或小局后点启动。按源公平价双边买入，两价合计约为源赔率的{" "}
                 {(autoReturnRate * 100).toFixed(0)}%。源赔率变动超过当前挂价后自动改价。
               </p>
               {autoFollow ? (
@@ -998,31 +968,13 @@ export function MatchConfigDesk({
               })}
             </div>
             <div className="mt-4 flex flex-wrap items-center gap-2.5">
-              <select
-                className={`${inputClass} w-auto`}
-                aria-label="交易模式"
-                value={mode}
-                onChange={(event) => setMode(event.target.value as TradingMode)}
-              >
-                <option value="paper">Paper</option>
-                <option value="shadow">Shadow</option>
-                <option value="live">Live</option>
-              </select>
               <Button
                 disabled={loading || budgetExceeded}
-                onClick={() => void save("save")}
-                variant="secondary"
+                onClick={() => void save()}
+                variant={makerRunning ? "secondary" : "primary"}
               >
-                {makerRunning ? "保存并热更新" : "仅保存配置"}
+                {makerRunning ? "保存并热更新" : "保存并挂单"}
               </Button>
-              {!makerRunning && (
-                <Button
-                  disabled={loading || preview.markets.length === 0 || budgetExceeded}
-                  onClick={() => void save("start")}
-                >
-                  保存并启动
-                </Button>
-              )}
             </div>
           </section>
         </>

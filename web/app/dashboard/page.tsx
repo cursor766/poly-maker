@@ -19,7 +19,7 @@ export default function DashboardPage() {
   const [status, setStatus] = useState<ControlStatus | null>(null);
   const [limits, setLimits] = useState<RuntimeLimits | null>(null);
   const [draftLimit, setDraftLimit] = useState(0);
-  const [mode, setMode] = useState<TradingMode>("shadow");
+  const [mode, setMode] = useState<TradingMode>("live");
   const [streamConnected, setStreamConnected] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -255,9 +255,9 @@ export default function DashboardPage() {
       {!running && (
         <section className="rounded-[18px] border border-dashed border-line bg-panel px-8 py-16 text-center">
           <span className="text-[11px] font-semibold tracking-[0.22em] text-gold">OFFLINE</span>
-          <h2 className="mt-3 mb-2 font-display text-2xl font-medium">交易核心未运行</h2>
+          <h2 className="mt-3 mb-2 font-display text-2xl font-medium">还没有挂单</h2>
           <p className="m-0 text-sm text-mute">
-            先在市场配置中启用盘口，然后从这里启动。配置修改可在运行中热生效。
+            在赛事页勾选小局或启动自动跟赔后会自动开始实盘挂单。这里只用来查看仓位、改价和锁定停止。
           </p>
         </section>
       )}

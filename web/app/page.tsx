@@ -21,20 +21,17 @@ export default function ConfigurePage() {
   const [sourceUrl, setSourceUrl] = useState("");
   const [polymarketUrl, setPolymarketUrl] = useState("");
   const [savedMatches, setSavedMatches] = useState<SavedMatch[]>([]);
-  const [makerRunning, setMakerRunning] = useState(false);
   const [limits, setLimits] = useState<RuntimeLimits | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [manualOpen, setManualOpen] = useState(false);
 
   const refreshSaved = useCallback(async () => {
-    const [markets, status, nextLimits] = await Promise.all([
+    const [markets, nextLimits] = await Promise.all([
       api<{ mappings: unknown[]; savedMatches: SavedMatch[] }>("/api/markets"),
-      api<{ process: { running: boolean } }>("/api/status"),
       api<RuntimeLimits>("/api/limits"),
     ]);
     setSavedMatches(markets.savedMatches);
-    setMakerRunning(status.process.running);
     setLimits(nextLimits);
   }, []);
 
@@ -102,14 +99,14 @@ export default function ConfigurePage() {
           选择比赛
         </h1>
         <p className="mt-2.5 max-w-[62ch] text-[15px] leading-relaxed text-mute">
-          先扫 KPL / KGL 赛程，点进一场（例如 上海EDG.M vs 杭州LGD.NBW）再配置全场和小局。默认 paper
-          / shadow，live 仍要双重确认。
+          先扫 KPL / KGL 赛程，点进一场（例如 上海EDG.M vs
+          杭州LGD.NBW）再配置全场和小局。勾选盘口或启动自动跟赔后会直接实盘挂单。
         </p>
       </header>
 
       {error && <div className={`${errorClass} mb-4`}>{error}</div>}
 
-      <LeagueAutoMaker limits={limits} makerRunning={makerRunning} onSaved={refreshSaved} />
+      <LeagueAutoMaker limits={limits} onSaved={refreshSaved} />
 
       {savedMatches.length > 0 && (
         <section className={`${panelClass} mb-5`}>

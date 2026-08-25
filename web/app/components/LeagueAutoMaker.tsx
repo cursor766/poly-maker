@@ -10,13 +10,13 @@ import {
   type MarketPreview,
   type RuntimeLimits,
 } from "@/lib/api";
+import { ensureMakerRunning } from "@/lib/maker-session";
 import { matchConfigPath } from "@/lib/match-route";
 import { ExposureBar } from "./ExposureBar";
 import { Button, errorClass, inputClass, panelClass, successClass } from "./ui";
 
 interface LeagueAutoMakerProps {
   limits: RuntimeLimits | null;
-  makerRunning: boolean;
   onSaved: () => Promise<void>;
 }
 
@@ -41,7 +41,7 @@ function pct(value: number): string {
   return `${(value * 100).toFixed(0)}%`;
 }
 
-export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMakerProps) {
+export function LeagueAutoMaker({ limits, onSaved }: LeagueAutoMakerProps) {
   const [leagues, setLeagues] = useState<LeagueSummary[]>([]);
   const [leagueId, setLeagueId] = useState("kpl");
   const [result, setResult] = useState<LeagueDiscoveryResult | null>(null);
@@ -218,12 +218,9 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
         method: "POST",
         body: JSON.stringify({ matches }),
       });
+      await ensureMakerRunning();
       await onSaved();
-      setMessage(
-        makerRunning
-          ? "批量配置已写入，交易核心正在热加载。"
-          : "批量配置已写入，可到交易台启动核心。",
-      );
+      setMessage("批量配置已写入，正在实盘挂单。");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {

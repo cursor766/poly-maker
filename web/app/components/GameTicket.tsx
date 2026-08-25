@@ -106,7 +106,8 @@ export function GameTicket({
   const depthMax = maxSize([...asks, ...bids]);
   const trades = (tape?.trades ?? []).filter((trade) => !mapped || trade.outcome === mapped);
   const openOrders = runtime?.openOrders ?? [];
-  const canTrade = market.tradable && makerRunning && mode !== "shadow";
+  const canPlace = market.tradable && mode !== "shadow";
+  const canManage = canPlace && makerRunning;
   const notional = price * shares * layers;
 
   const layerPreview = useMemo(() => {
@@ -284,11 +285,7 @@ export function GameTicket({
                 </p>
               ) : (
                 <p className="mt-1 mb-0 text-[12px] text-mute">
-                  {runtime?.reason
-                    ? `等待解锁：${runtime.reason}`
-                    : makerRunning
-                      ? "已勾选，等待源赔率驱动挂单。"
-                      : "勾选后请保存并启动核心。"}
+                  {runtime?.reason ? `等待解锁：${runtime.reason}` : "已勾选，等待源赔率驱动挂单。"}
                 </p>
               )}
             </div>
@@ -343,16 +340,14 @@ export function GameTicket({
                 将在 {layerPreview.map((value) => cents(value)).join(" / ")} 挂 {shares} shares · 约
                 ${notional.toFixed(2)}
               </p>
-              {!makerRunning ? (
-                <p className="mt-0 mb-3 text-[12px] text-amber">先保存并启动核心后才能一键挂单。</p>
-              ) : mode === "shadow" ? (
+              {mode === "shadow" ? (
                 <p className="mt-0 mb-3 text-[12px] text-amber">
-                  Shadow 只读，请用 Paper 或 Live。
+                  Shadow 只读，请先在交易台锁定并停止后再挂单。
                 </p>
               ) : null}
               <Button
                 className="w-full"
-                disabled={busy || !canTrade || !mapped || !price || shares < market.minOrderSize}
+                disabled={busy || !canPlace || !mapped || !price || shares < market.minOrderSize}
                 onClick={() =>
                   void onPlace({
                     outcome: mapped as string,
@@ -375,7 +370,7 @@ export function GameTicket({
           <div className="mb-3 flex items-center justify-between">
             <h4 className="m-0 text-[13px] font-medium">我们的挂单</h4>
             <Button
-              disabled={busy || !canTrade || openOrders.length === 0}
+              disabled={busy || !canManage || openOrders.length === 0}
               onClick={() => void onCancelAll()}
               variant="danger"
             >
@@ -388,7 +383,7 @@ export function GameTicket({
             <div className="grid gap-2">
               {openOrders.map((order) => (
                 <OpenOrderRow
-                  busy={busy || !canTrade}
+                  busy={busy || !canManage}
                   editValue={editPrice[order.id] ?? `${Math.round(order.price * 1000) / 10}`}
                   key={order.id}
                   onCancel={() => void onCancel(order.id)}
