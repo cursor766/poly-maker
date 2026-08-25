@@ -17,6 +17,7 @@ import {
   type TradingMode,
 } from "@/lib/api";
 import { estimateMarketBudget } from "@/lib/budget";
+import { subscribeToStatus } from "@/lib/stream";
 
 interface MarketForm {
   enabled: boolean;
@@ -186,6 +187,21 @@ export function MatchConfigDesk({
   useEffect(() => {
     void loadPreview();
   }, [loadPreview]);
+
+  useEffect(() => {
+    return subscribeToStatus(
+      (status) => {
+        setMakerRunning(status.process.running);
+        setRuntimeMarkets(
+          Object.fromEntries(
+            (status.runtime?.markets ?? []).map((item) => [item.sourceMarketId, item]),
+          ),
+        );
+        if (status.runtime?.mode) setMode(status.runtime.mode);
+      },
+      () => undefined,
+    );
+  }, []);
 
   useEffect(() => {
     const gameMarkets = (preview?.markets ?? []).filter(
@@ -370,6 +386,21 @@ export function MatchConfigDesk({
           quotes,
         }),
       });
+      const deadline = Date.now() + 8_000;
+      while (Date.now() < deadline) {
+        const status = await api<ControlStatus>("/api/status");
+        const live = status.runtime?.markets.find(
+          (item) => item.sourceMarketId === market.sourceMarketId,
+        );
+        setMakerRunning(status.process.running);
+        setRuntimeMarkets(
+          Object.fromEntries(
+            (status.runtime?.markets ?? []).map((item) => [item.sourceMarketId, item]),
+          ),
+        );
+        if (live && (live.openOrderCount > 0 || live.quoteMode === "manual")) break;
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
       await refreshMeta();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
