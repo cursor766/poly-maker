@@ -123,7 +123,7 @@ export function GameTicket({
           const active = index === sideIndex;
           const mappedName = mappedOutcomes[index];
           const itemBook = mappedName ? tape?.books[mappedName] : undefined;
-          const last = itemBook?.bids[0]?.price ?? item.recommendedBuyPrice;
+          const last = item.recommendedBuyPrice ?? itemBook?.bids[0]?.price;
           return (
             <button
               className={`rounded-xl border px-3 py-3 text-left transition-colors ${
