@@ -15,6 +15,7 @@ import {
   complementBuyPricesOnTick,
   sourceImpliedSum,
 } from "@/lib/complement-prices";
+import { annotateBookLevels } from "@/lib/own-book";
 import { clampPrice } from "@/lib/tick";
 
 function cents(value: number): string {
@@ -111,11 +112,14 @@ export function GameTicket({
   const rakePct = (1 - autoReturnRate) * 100;
   const rawPrice = priceCents === "" ? (suggested ?? 0) : Number(priceCents) / 100;
   const price = rawPrice > 0 ? clampPrice(rawPrice, market.tickSize) : 0;
-  const asks = [...(book?.asks ?? [])].slice(0, 6).reverse();
-  const bids = (book?.bids ?? []).slice(0, 6);
+  const openOrders = runtime?.openOrders ?? [];
+  const sideOrders = openOrders.filter((order) => !mapped || order.outcome === mapped);
+  const annotatedAsks = annotateBookLevels(book?.asks ?? [], sideOrders, "SELL", "ask").slice(0, 6);
+  const annotatedBids = annotateBookLevels(book?.bids ?? [], sideOrders, "BUY", "bid").slice(0, 6);
+  const asks = [...annotatedAsks].reverse();
+  const bids = annotatedBids;
   const depthMax = maxSize([...asks, ...bids]);
   const trades = (tape?.trades ?? []).filter((trade) => !mapped || trade.outcome === mapped);
-  const openOrders = runtime?.openOrders ?? [];
   const canPlace = market.tradable && mode !== "shadow";
   const canManage = canPlace && makerRunning;
   const notional = price * shares * layers;
@@ -232,6 +236,7 @@ export function GameTicket({
                 key={`ask-${level.price}`}
                 level={level}
                 onClick={() => setPriceCents(Math.round(level.price * 1000) / 10)}
+                ours={level.ours}
                 side="ask"
               />
             ))}
@@ -247,6 +252,7 @@ export function GameTicket({
                 key={`bid-${level.price}`}
                 level={level}
                 onClick={() => setPriceCents(Math.round(level.price * 1000) / 10)}
+                ours={level.ours}
                 side="bid"
               />
             ))}
@@ -444,26 +450,38 @@ function BookRow({
   level,
   side,
   depth,
+  ours,
   onClick,
 }: {
   level: { price: number; size: number };
   side: "bid" | "ask";
   depth: number;
+  ours: number;
   onClick: () => void;
 }) {
+  const oursActive = ours > 0;
   return (
     <button
       className={`relative grid grid-cols-[1fr_72px_72px] overflow-hidden rounded-sm px-1.5 py-1 text-left ${
-        side === "bid" ? "text-sage" : "text-rose"
+        oursActive ? "bg-gold/18 text-gold" : side === "bid" ? "text-sage" : "text-rose"
       }`}
       onClick={onClick}
       type="button"
     >
       <i
-        className={`absolute inset-y-0 right-0 ${side === "bid" ? "bg-sage/15" : "bg-rose/15"}`}
+        className={`absolute inset-y-0 right-0 ${
+          oursActive ? "bg-gold/20" : side === "bid" ? "bg-sage/15" : "bg-rose/15"
+        }`}
         style={{ width: `${Math.max(8, depth * 100)}%` }}
       />
-      <span className="relative">{cents(level.price)}</span>
+      <span className="relative flex items-center gap-1.5">
+        {cents(level.price)}
+        {oursActive ? (
+          <span className="rounded border border-gold/40 bg-gold/15 px-1 py-px font-sans text-[10px] tracking-normal">
+            我们 {ours.toFixed(ours >= 10 ? 0 : 1)}
+          </span>
+        ) : null}
+      </span>
       <span className="relative text-right tabular-nums">{level.size.toFixed(1)}</span>
       <span className="relative text-right tabular-nums">
         {(level.price * level.size).toFixed(1)}

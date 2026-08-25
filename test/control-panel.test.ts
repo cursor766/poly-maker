@@ -531,6 +531,9 @@ test("runtime limits persist partial overrides over safe defaults", async () => 
     const limits = await readRuntimeLimits(defaults, path);
     assert.equal(limits.maxAccountNotional, 80);
     assert.equal(limits.maxOrderNotional, 10);
+    await writeRuntimeLimits({ maxAccountNotional: 0 }, defaults, path);
+    const uncapped = await readRuntimeLimits(defaults, path);
+    assert.equal(uncapped.maxAccountNotional, 0);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

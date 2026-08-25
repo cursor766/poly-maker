@@ -279,3 +279,30 @@ test("reserves other markets' open notional instead of overshooting the account 
   );
   assert.equal(quotes.length, 0);
 });
+
+test("an unlimited account cap still quotes when other markets already have orders", () => {
+  const books = new Map<string, TokenBook>([
+    ["a", { tokenId: "a", bids: [], asks: [{ price: 0.9, size: 10 }], receivedAt: 1 }],
+    ["b", { tokenId: "b", bids: [], asks: [{ price: 0.9, size: 10 }], receivedAt: 1 }],
+  ]);
+  const quotes = generateComplementBuyQuotes(
+    market,
+    new Map([
+      ["A", 0.6],
+      ["B", 0.4],
+    ]),
+    books,
+    positions,
+    {
+      targetReturnRate: 0.8,
+      orderNotional: 5,
+      maxOutcomePosition: 50,
+      maxOrderNotional: 5,
+      maxAccountNotional: 0,
+      reservedAccountNotional: 9600,
+      quoteLevels: 1,
+      levelSpacingTicks: 2,
+    },
+  );
+  assert.equal(quotes.length, 2);
+});

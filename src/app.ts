@@ -1013,8 +1013,9 @@ export class MakerApp {
     runtime: MarketRuntime,
     reservedAccountNotional: number,
   ): string | null {
-    const used = reservedAccountNotional + longShareExposure(runtime.executor.positions);
     const limit = this.runtimeLimits.maxAccountNotional;
+    if (!(limit > 0)) return null;
+    const used = reservedAccountNotional + longShareExposure(runtime.executor.positions);
     if (used + 1e-9 < limit) return null;
     return `账户额度已满（其他盘口占用 $${used.toFixed(2)} / 上限 $${limit.toFixed(2)}），本局本轮不挂`;
   }

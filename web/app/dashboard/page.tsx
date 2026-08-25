@@ -256,7 +256,7 @@ export default function DashboardPage() {
                     className={inputClass}
                     id="account-limit"
                     type="number"
-                    min="1"
+                    min="0"
                     value={draftLimit}
                     onChange={(event) => setDraftLimit(Number(event.target.value))}
                   />
@@ -266,8 +266,9 @@ export default function DashboardPage() {
                 </div>
               </label>
               <p className="mt-2 mb-0 text-[12px] text-mute">
-                全场/单局单盘 ${limits.maxGameNotional}，让分/总数单盘 ${limits.maxMapNotional}
-                。单笔不超过 ${limits.maxOrderNotional}。
+                0 表示不限制账户占用。限价买单锁定的是价格 × 股数，不是股份面额；$400
+                余额大约能挂 4 万股 1¢ 单。全场/单局单盘 ${limits.maxGameNotional}，让分/总数单盘 $
+                {limits.maxMapNotional}。单笔不超过 ${limits.maxOrderNotional}。
               </p>
             </div>
           )}

@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { AppConfig } from "../config.js";
 
 export const runtimeLimitsSchema = z.object({
-  maxAccountNotional: z.number().positive(),
+  maxAccountNotional: z.number().nonnegative(),
   maxOrderNotional: z.number().positive(),
   maxOutcomePosition: z.number().positive(),
   maxTotalExposure: z.number().positive(),

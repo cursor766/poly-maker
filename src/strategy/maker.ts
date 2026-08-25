@@ -39,10 +39,25 @@ export function availableAccountNotional(
   positions: PositionState,
   reservedAccountNotional = 0,
 ): number {
+  if (!(maxAccountNotional > 0)) return Number.POSITIVE_INFINITY;
   return Math.max(
     0,
     maxAccountNotional - longShareExposure(positions) - Math.max(0, reservedAccountNotional),
   );
+}
+
+export function availableMarketNotional(
+  maxMarketNotional: number | undefined,
+  maxAccountNotional: number,
+  localShares: number,
+): number {
+  const cap =
+    maxMarketNotional !== undefined && maxMarketNotional > 0
+      ? maxMarketNotional
+      : maxAccountNotional > 0
+        ? maxAccountNotional
+        : Number.POSITIVE_INFINITY;
+  return Math.max(0, cap - Math.max(0, localShares));
 }
 
 export interface TopOfBookMakerParameters extends ComplementMakerParameters {
@@ -268,9 +283,10 @@ export function generateComplementBuyQuotes(
     positions,
     parameters.reservedAccountNotional,
   );
-  const marketAvailable = Math.max(
-    0,
-    (parameters.maxMarketNotional ?? parameters.maxAccountNotional) - localShares,
+  const marketAvailable = availableMarketNotional(
+    parameters.maxMarketNotional,
+    parameters.maxAccountNotional,
+    localShares,
   );
   let availableNotional = Math.min(accountAvailable, marketAvailable);
   const quotes: Quote[] = [];
@@ -383,9 +399,10 @@ export function generateTopOfBookBuyQuotes(
     positions,
     parameters.reservedAccountNotional,
   );
-  const marketAvailable = Math.max(
-    0,
-    (parameters.maxMarketNotional ?? parameters.maxAccountNotional) - localShares,
+  const marketAvailable = availableMarketNotional(
+    parameters.maxMarketNotional,
+    parameters.maxAccountNotional,
+    localShares,
   );
   let availableNotional = Math.min(accountAvailable, marketAvailable);
   const quotes: Quote[] = [];

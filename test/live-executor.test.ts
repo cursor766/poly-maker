@@ -95,6 +95,7 @@ function makeExecutor(
   gateway: FakeGateway,
   audit: AuditLog,
   mode: "shadow" | "live",
+  maxAccountNotional = 20,
 ): LiveExecutor {
   return new LiveExecutor(gateway, audit, {
     mode,
@@ -102,7 +103,7 @@ function makeExecutor(
     tokenIds: market.tokenIds,
     allConditionIds: [market.conditionId],
     maxOrderNotional: 5,
-    maxAccountNotional: 20,
+    maxAccountNotional,
     cancelConfirmRetries: 2,
     cancelConfirmDelayMs: 1,
     repriceThresholdTicks: 2,
@@ -202,6 +203,36 @@ test("does not fail closed when the account is already at the notional cap", asy
     await executor.reconcile(market, [quote], books);
     assert.equal(gateway.placed.length, 0);
     assert.equal(gateway.canceledIds.length, 0);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("places quotes when the account notional cap is disabled", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "poly-maker-uncapped-"));
+  try {
+    const gateway = new FakeGateway();
+    gateway.orders = [
+      {
+        id: "other-market",
+        conditionId: "other",
+        tokenId: "x",
+        side: "BUY",
+        price: 0.5,
+        size: 50,
+        matchedSize: 0,
+      },
+    ];
+    const executor = makeExecutor(
+      gateway,
+      new AuditLog(join(directory, "audit.ndjson")),
+      "live",
+      0,
+    );
+    executor.unlock();
+    await executor.reconcile(market, [quote], books);
+    assert.equal(gateway.placed.length, 1);
+    assert.equal(gateway.placed[0]?.tokenId, "a");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

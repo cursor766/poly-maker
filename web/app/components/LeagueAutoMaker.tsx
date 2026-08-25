@@ -12,7 +12,6 @@ import {
 } from "@/lib/api";
 import { ensureMakerRunning } from "@/lib/maker-session";
 import { matchConfigPath } from "@/lib/match-route";
-import { ExposureBar } from "./ExposureBar";
 import { Button, errorClass, inputClass, panelClass, successClass } from "./ui";
 
 interface LeagueAutoMakerProps {
@@ -63,9 +62,6 @@ export function LeagueAutoMaker({ limits, onSaved }: LeagueAutoMakerProps) {
     () => candidates.filter((candidate) => selected.has(candidate.sourceMatchId)),
     [candidates, selected],
   );
-  const extraFactor = 1 + (includeGameWinners ? 6 : 0) + (includeMapMarkets ? 5 : 0);
-  const estimatedNotional = selectedCandidates.length * orderNotional * 2 * extraFactor;
-  const budgetExceeded = limits !== null && estimatedNotional > limits.maxAccountNotional + 1e-9;
 
   useEffect(() => {
     void api<{ leagues: LeagueSummary[] }>("/api/leagues")
@@ -334,15 +330,6 @@ export function LeagueAutoMaker({ limits, onSaved }: LeagueAutoMakerProps) {
               />
             </label>
           </div>
-          {limits && (
-            <div className="mb-4">
-              <ExposureBar
-                label="本次预计账户占用"
-                limit={limits.maxAccountNotional}
-                used={estimatedNotional}
-              />
-            </div>
-          )}
 
           {candidates.length === 0 && (
             <div className="rounded-xl border border-dashed border-line px-4 py-8 text-center text-sm text-mute">
@@ -493,7 +480,7 @@ export function LeagueAutoMaker({ limits, onSaved }: LeagueAutoMakerProps) {
               同时配置地图让分 / 总数（含 +3.5）
             </label>
             <Button
-              disabled={busy || selectedCandidates.length === 0 || budgetExceeded}
+              disabled={busy || selectedCandidates.length === 0}
               onClick={() => void saveBatch()}
             >
               确认配置 {selectedCandidates.length} 场

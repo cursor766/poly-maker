@@ -22,7 +22,6 @@ import {
   type RuntimeMarket,
   type TradingMode,
 } from "@/lib/api";
-import { estimateMarketBudget } from "@/lib/budget";
 import { ensureMakerRunning, MATCH_DESK_MODE } from "@/lib/maker-session";
 import { subscribeToStatus } from "@/lib/stream";
 import { clampPrice, clobSize } from "@/lib/tick";
@@ -539,14 +538,6 @@ export function MatchConfigDesk({
     }
   }
 
-  const estimatedNotional = estimateMarketBudget(
-    Object.entries(forms).map(([marketId, form]) => ({
-      ...form,
-      tradable:
-        preview?.markets.find((item) => item.sourceMarketId === marketId)?.tradable ?? false,
-    })),
-  );
-  const budgetExceeded = limits !== null && estimatedNotional > limits.maxAccountNotional + 1e-9;
   const title = preview?.teams.join(" vs ") ?? eventSlug;
 
   return (
@@ -729,43 +720,18 @@ export function MatchConfigDesk({
                       value={autoNotional}
                     />
                   </Field>
-                  <Button
-                    disabled={loading || budgetExceeded}
-                    onClick={() => void startAutoFollow()}
-                  >
+                  <Button disabled={loading} onClick={() => void startAutoFollow()}>
                     按勾选启动自动跟赔
                   </Button>
                 </div>
               ) : null}
             </div>
             {limits && (
-              <div
-                className={`mb-4 rounded-xl border px-4 py-3.5 ${
-                  budgetExceeded ? "border-rose/35 bg-rose/10" : "border-line bg-inset"
-                }`}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-[11px] uppercase tracking-[0.16em] text-mute-2">
-                    预计挂单占用
-                  </span>
-                  <strong>
-                    ${estimatedNotional.toFixed(2)} / ${limits.maxAccountNotional.toFixed(2)}
-                  </strong>
-                </div>
-                <div className="mt-2.5 h-1 overflow-hidden rounded-full bg-line">
-                  <i
-                    className={`block h-full ${budgetExceeded ? "bg-rose" : "bg-gold"}`}
-                    style={{
-                      width: `${Math.min(100, (estimatedNotional / limits.maxAccountNotional) * 100)}%`,
-                    }}
-                  />
-                </div>
-                <p className="mt-2 mb-0 text-xs text-mute">
-                  {budgetExceeded
-                    ? "超过账户额度上限，请减少市场、层数或每层额度。"
-                    : `按每个市场双边 × 层数 × 每层额度估算。全场/单局单盘上限 $${limits.maxGameNotional}，让分/总数 $${limits.maxMapNotional}。`}
-                </p>
-              </div>
+              <p className="mb-4 mt-0 text-xs leading-relaxed text-mute">
+                限价买单锁定的是价格 × 股数的 USDC，不是股份面额。$400 余额大约能挂 4 万股
+                1¢ 单。全场/单局单盘仍限制 ${limits.maxGameNotional}，让分/总数 $
+                {limits.maxMapNotional}。
+              </p>
             )}
             <div className="grid gap-3">
               {preview.markets.length === 0 && (
@@ -977,7 +943,7 @@ export function MatchConfigDesk({
             </div>
             <div className="mt-4 flex flex-wrap items-center gap-2.5">
               <Button
-                disabled={loading || budgetExceeded}
+                disabled={loading}
                 onClick={() => void save()}
                 variant={makerRunning ? "secondary" : "primary"}
               >

@@ -61,7 +61,7 @@ const envSchema = z
     MAX_OUTCOME_POSITION: z.coerce.number().positive().default(2000),
     MAX_TOTAL_EXPOSURE: z.coerce.number().positive().default(2000),
     MAX_ORDER_NOTIONAL: z.coerce.number().positive().default(300),
-    MAX_ACCOUNT_NOTIONAL: z.coerce.number().positive().default(400),
+    MAX_ACCOUNT_NOTIONAL: z.coerce.number().nonnegative().default(0),
     MAX_GAME_NOTIONAL: z.coerce.number().positive().default(300),
     MAX_MAP_NOTIONAL: z.coerce.number().positive().default(200),
     REFILL_TOP_DELAY_MS: z.coerce.number().int().nonnegative().default(10_000),

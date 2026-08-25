@@ -267,7 +267,10 @@ export class LiveExecutor implements QuoteExecutor {
       (sum, position) => sum + Math.max(0, position),
       0,
     );
-    let remaining = this.options.maxAccountNotional - otherOrderNotional - positionNotional;
+    let remaining =
+      this.options.maxAccountNotional > 0
+        ? this.options.maxAccountNotional - otherOrderNotional - positionNotional
+        : Number.POSITIVE_INFINITY;
     const valid: Quote[] = [];
     for (const quote of quotes) {
       if (quote.side !== "BUY")

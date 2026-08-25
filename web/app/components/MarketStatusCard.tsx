@@ -1,5 +1,6 @@
 import { Button } from "@/app/components/ui";
 import type { DeskMarketSnapshot, RestingOrder, RuntimeMarket, TradingMode } from "@/lib/api";
+import { annotateBookLevels } from "@/lib/own-book";
 
 const reasonLabels: Record<string, string> = {
   "mqtt-disconnected": "源站连接断开",
@@ -314,9 +315,8 @@ function OrderBookPane({
   book?: RuntimeMarket["books"][string];
   orders: RestingOrder[];
 }) {
-  const ourPrices = new Set(orders.map((order) => order.price.toFixed(4)));
-  const asks = [...(book?.asks ?? [])].slice(0, 6).reverse();
-  const bids = (book?.bids ?? []).slice(0, 6);
+  const asks = [...annotateBookLevels(book?.asks ?? [], orders, "SELL", "ask").slice(0, 6)].reverse();
+  const bids = annotateBookLevels(book?.bids ?? [], orders, "BUY", "bid").slice(0, 6);
   return (
     <div className="bg-raised px-5 py-4">
       <div className="mb-3 flex justify-between gap-2.5">
@@ -329,21 +329,11 @@ function OrderBookPane({
       </div>
       <div className="grid gap-px font-mono text-[11px]">
         {asks.map((level) => (
-          <BookRow
-            key={`ask-${level.price}`}
-            level={level}
-            ours={ourPrices.has(level.price.toFixed(4))}
-            side="ask"
-          />
+          <BookRow key={`ask-${level.price}`} level={level} ours={level.ours} side="ask" />
         ))}
         <div className="py-1 text-center text-[10px] tracking-[0.16em] text-mute-2">SPREAD</div>
         {bids.map((level) => (
-          <BookRow
-            key={`bid-${level.price}`}
-            level={level}
-            ours={ourPrices.has(level.price.toFixed(4))}
-            side="bid"
-          />
+          <BookRow key={`bid-${level.price}`} level={level} ours={level.ours} side="bid" />
         ))}
         {asks.length === 0 && bids.length === 0 ? (
           <div className="py-3 text-center text-mute">等待订单簿…</div>
@@ -359,18 +349,19 @@ function BookRow({
   side,
 }: {
   level: { price: number; size: number };
-  ours: boolean;
+  ours: number;
   side: "bid" | "ask";
 }) {
+  const oursActive = ours > 0;
   return (
     <div
       className={`flex justify-between rounded-sm px-1.5 py-0.5 ${
-        ours ? "bg-gold/15 text-gold" : side === "bid" ? "text-sage" : "text-rose"
+        oursActive ? "bg-gold/15 text-gold" : side === "bid" ? "text-sage" : "text-rose"
       }`}
     >
       <span>{cents(level.price)}</span>
       <span>{level.size.toFixed(1)}</span>
-      {ours ? <span>我们</span> : <span />}
+      {oursActive ? <span>我们 {ours.toFixed(ours >= 10 ? 0 : 1)}</span> : <span />}
     </div>
   );
 }
