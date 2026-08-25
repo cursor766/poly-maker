@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { generateComplementBuyQuotes } from "../src/strategy/maker.js";
+import { complementTargetBuyPrices, generateComplementBuyQuotes } from "../src/strategy/maker.js";
 import type { PositionState, ResolvedMarket, TokenBook } from "../src/types.js";
 
 const market: ResolvedMarket = {
@@ -16,6 +16,15 @@ const market: ResolvedMarket = {
 };
 
 const positions: PositionState = { byToken: new Map(), cash: 100 };
+
+test("95% target return makes both BUY prices sum to about 95 cents", () => {
+  const prices = complementTargetBuyPrices(0.53, 0.47, 0.95);
+  assert.ok(prices);
+  const [buyA, buyB] = prices;
+  assert.ok(Math.abs(buyA + buyB - (2 - 1 / 0.95)) < 1e-12);
+  assert.ok(buyA > 0.5 && buyA < 0.51);
+  assert.ok(buyB > 0.44 && buyB < 0.45);
+});
 
 test("converts 80% return-rate asks into complementary BUY-only quotes", () => {
   const books = new Map<string, TokenBook>([
@@ -65,6 +74,58 @@ test("converts 80% return-rate asks into complementary BUY-only quotes", () => {
     ],
   );
   for (const quote of quotes) assert.ok(quote.price * quote.size <= 5 + 1e-9);
+});
+
+test("95% complementary quotes keep both sides under the source-fair pair", () => {
+  const books = new Map<string, TokenBook>([
+    [
+      "a",
+      {
+        tokenId: "a",
+        bids: [{ price: 0.08, size: 10 }],
+        asks: [{ price: 0.92, size: 10 }],
+        receivedAt: 1,
+      },
+    ],
+    [
+      "b",
+      {
+        tokenId: "b",
+        bids: [{ price: 0.08, size: 10 }],
+        asks: [{ price: 0.92, size: 10 }],
+        receivedAt: 1,
+      },
+    ],
+  ]);
+  const quotes = generateComplementBuyQuotes(
+    market,
+    new Map([
+      ["A", 0.53],
+      ["B", 0.47],
+    ]),
+    books,
+    positions,
+    {
+      targetReturnRate: 0.95,
+      orderNotional: 5,
+      maxOutcomePosition: 50,
+      maxOrderNotional: 5,
+      maxAccountNotional: 20,
+      quoteLevels: 1,
+      levelSpacingTicks: 2,
+    },
+  );
+  assert.deepEqual(
+    quotes.map(({ outcome, side, price }) => ({ outcome, side, price })),
+    [
+      { outcome: "A", side: "BUY", price: 0.5 },
+      { outcome: "B", side: "BUY", price: 0.44 },
+    ],
+  );
+  const first = quotes[0];
+  const second = quotes[1];
+  assert.ok(first && second);
+  assert.equal(Number((first.price + second.price).toFixed(2)), 0.94);
 });
 
 test("retreats one tick instead of crossing the best ask", () => {

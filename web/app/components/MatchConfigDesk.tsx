@@ -4,7 +4,14 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { GameTicket } from "@/app/components/GameTicket";
-import { Button, errorClass, Field, inputClass, panelClass } from "@/app/components/ui";
+import {
+  Button,
+  errorClass,
+  Field,
+  inputClass,
+  panelClass,
+  successClass,
+} from "@/app/components/ui";
 import {
   api,
   type ControlStatus,
@@ -124,6 +131,25 @@ function buildForms(
   );
 }
 
+function withAutoFollow(
+  form: MarketForm,
+  enabled: boolean,
+  autoFollow: boolean,
+  targetReturnRate: number,
+  orderNotional: number,
+): MarketForm {
+  if (!autoFollow || !enabled) return { ...form, enabled };
+  return {
+    ...form,
+    enabled: true,
+    quoteMode: "complement-buy",
+    targetReturnRate,
+    orderNotional,
+    quoteLevels: 1,
+    levelSpacingTicks: 1,
+  };
+}
+
 export function MatchConfigDesk({
   eventSlug,
   sourceUrl,
@@ -143,6 +169,10 @@ export function MatchConfigDesk({
   const [mode, setMode] = useState<TradingMode>("shadow");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [autoFollow, setAutoFollow] = useState(false);
+  const [autoReturnRate, setAutoReturnRate] = useState(0.95);
+  const [autoNotional, setAutoNotional] = useState(5);
 
   const refreshMeta = useCallback(async () => {
     const [markets, status, nextLimits] = await Promise.all([
@@ -256,7 +286,11 @@ export function MatchConfigDesk({
       Object.fromEntries(
         Object.entries(current).map(([marketId, form]) => {
           const market = preview?.markets.find((item) => item.sourceMarketId === marketId);
-          return [marketId, { ...form, enabled: !!market && market.tradable && predicate(market) }];
+          const enabled = !!market && market.tradable && predicate(market);
+          return [
+            marketId,
+            withAutoFollow(form, enabled, autoFollow, autoReturnRate, autoNotional),
+          ];
         }),
       ),
     );
@@ -268,7 +302,7 @@ export function MatchConfigDesk({
         Object.entries(current).map(([marketId, form]) => {
           const market = preview?.markets.find((item) => item.sourceMarketId === marketId);
           if (!market?.tradable || !predicate(market)) return [marketId, form];
-          return [marketId, { ...form, enabled: true }];
+          return [marketId, withAutoFollow(form, true, autoFollow, autoReturnRate, autoNotional)];
         }),
       ),
     );
@@ -321,6 +355,101 @@ export function MatchConfigDesk({
       }),
     });
     await refreshMeta();
+  }
+
+  async function resumeAutoMarket(sourceMarketId: string) {
+    await waitForRuntimeMarket(sourceMarketId);
+    await api("/api/desk/command", {
+      method: "POST",
+      body: JSON.stringify({ action: "resume", sourceMarketId }),
+    });
+  }
+
+  async function toggleGameEnabled(market: MarketPreview["markets"][number], enabled: boolean) {
+    const current = forms[market.sourceMarketId];
+    if (!current) return;
+    const nextForms = {
+      ...forms,
+      [market.sourceMarketId]: withAutoFollow(
+        current,
+        enabled,
+        autoFollow,
+        autoReturnRate,
+        autoNotional,
+      ),
+    };
+    setForms(nextForms);
+    if (!autoFollow) return;
+    setLoading(true);
+    setError("");
+    setMessage("");
+    try {
+      await persistConfig(nextForms);
+      if (makerRunning) {
+        if (enabled) await resumeAutoMarket(market.sourceMarketId);
+        else {
+          await api("/api/desk/command", {
+            method: "POST",
+            body: JSON.stringify({ action: "cancel", sourceMarketId: market.sourceMarketId }),
+          });
+        }
+        await refreshMeta();
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function startAutoFollow() {
+    if (!preview) return;
+    const nextForms = Object.fromEntries(
+      Object.entries(forms).map(([marketId, form]) => [
+        marketId,
+        withAutoFollow(form, form.enabled, true, autoReturnRate, autoNotional),
+      ]),
+    ) as Record<string, MarketForm>;
+    const selected = preview.markets.filter(
+      (market) => market.tradable && nextForms[market.sourceMarketId]?.enabled,
+    );
+    if (selected.length === 0) {
+      setError("请先勾选要自动跟赔的全场或小局。");
+      return;
+    }
+    setAutoFollow(true);
+    setForms(nextForms);
+    setLoading(true);
+    setError("");
+    setMessage("");
+    try {
+      await persistConfig(nextForms);
+      const startMode = mode === "shadow" ? "paper" : mode;
+      if (!makerRunning) {
+        if (startMode === "live") {
+          const confirmed = window.confirm(
+            "你将启动真实交易。系统会使用 .env 中的钱包并实际挂单。确认继续？",
+          );
+          if (!confirmed) return;
+        }
+        await api("/api/start", {
+          method: "POST",
+          body: JSON.stringify({ mode: startMode }),
+        });
+        setMode(startMode);
+      }
+      for (const market of selected) {
+        await resumeAutoMarket(market.sourceMarketId);
+      }
+      await refreshMeta();
+      setMessage(
+        `已对 ${selected.length} 个盘口开启自动跟赔：双边买价合计约 ${(autoReturnRate * 100).toFixed(0)}%，源赔率变动后自动改价。`,
+      );
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function sendDeskCommand(body: Record<string, unknown>) {
@@ -459,11 +588,13 @@ export function MatchConfigDesk({
           {title}
         </h1>
         <p className="mt-2.5 max-w-[62ch] text-[15px] leading-relaxed text-mute">
-          在这场比赛里勾选全场、小局和让分盘。默认全部关闭；第一局结束后再回来只勾下一局即可。
+          勾选全场或小局。开启自动跟赔后，核心按源公平价双边挂单，两买价合计约为源赔率的
+          95%；源目标价偏离当前挂价后自动改挂。也可以继续用小局票上手动一键挂单。
         </p>
       </header>
 
       {error && <div className={`${errorClass} mb-4`}>{error}</div>}
+      {message && <div className={`${successClass} mb-4`}>{message}</div>}
 
       {!preview && loading && (
         <section className={`${panelClass} text-sm text-mute`}>正在读取这场比赛的盘口…</section>
@@ -508,8 +639,7 @@ export function MatchConfigDesk({
               <div>
                 <h2 className="m-0 text-lg font-medium">盘口与挂单参数</h2>
                 <p className="mt-1.5 text-sm leading-relaxed text-mute">
-                  全场仍用参数卡。小局是 Polymarket 风格交易台：订单簿、activity、推荐价、shares
-                  和多层一键挂单。Shadow 只读，Paper / Live 才会真正挂上。
+                  全场仍用参数卡。小局票可以手动挂，也可以勾选后按源赔率自动双边跟价。
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -583,6 +713,53 @@ export function MatchConfigDesk({
                 )}
               </div>
             </div>
+            <div className="mb-4 rounded-xl border border-gold/25 bg-gold/5 px-4 py-3.5">
+              <label className="flex items-center gap-2 text-sm font-medium">
+                <input
+                  checked={autoFollow}
+                  onChange={(event) => setAutoFollow(event.target.checked)}
+                  type="checkbox"
+                />
+                开启自动跟赔
+              </label>
+              <p className="mt-2 mb-3 text-[13px] leading-relaxed text-mute">
+                勾选全场或小局后点启动。核心按源公平价双边买入，两价合计约为源赔率的{" "}
+                {(autoReturnRate * 100).toFixed(0)}%。源赔率变动超过当前挂价后自动改价。
+              </p>
+              {autoFollow ? (
+                <div className="grid items-end gap-2.5 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+                  <Field htmlFor="auto-return" label="目标回报 %">
+                    <input
+                      className={inputClass}
+                      id="auto-return"
+                      max="99"
+                      min="50"
+                      onChange={(event) => setAutoReturnRate(Number(event.target.value) / 100)}
+                      step="1"
+                      type="number"
+                      value={Math.round(autoReturnRate * 100)}
+                    />
+                  </Field>
+                  <Field htmlFor="auto-notional" label="每层额度 $">
+                    <input
+                      className={inputClass}
+                      id="auto-notional"
+                      min="1"
+                      onChange={(event) => setAutoNotional(Number(event.target.value))}
+                      step="1"
+                      type="number"
+                      value={autoNotional}
+                    />
+                  </Field>
+                  <Button
+                    disabled={loading || budgetExceeded}
+                    onClick={() => void startAutoFollow()}
+                  >
+                    按勾选启动自动跟赔
+                  </Button>
+                </div>
+              ) : null}
+            </div>
             {limits && (
               <div
                 className={`mb-4 rounded-xl border px-4 py-3.5 ${
@@ -653,7 +830,7 @@ export function MatchConfigDesk({
                               checked={form.enabled}
                               disabled={!market.tradable}
                               onChange={(event) =>
-                                updateForm(market.sourceMarketId, { enabled: event.target.checked })
+                                void toggleGameEnabled(market, event.target.checked)
                               }
                             />
                             {market.tradable ? "启用" : "不可交易"}
@@ -780,10 +957,13 @@ export function MatchConfigDesk({
                 if (!form) return null;
                 return (
                   <GameTicket
+                    autoFollow={autoFollow}
+                    autoReturnRate={autoReturnRate}
                     busy={loading}
                     defaultLayers={form.quoteLevels}
                     defaultShares={Math.max(market.minOrderSize, form.orderNotional)}
                     defaultSpacing={form.levelSpacingTicks}
+                    enabled={form.enabled}
                     key={market.sourceMarketId}
                     makerRunning={makerRunning}
                     mappedOutcomes={form.outcomes}
@@ -810,6 +990,7 @@ export function MatchConfigDesk({
                       })
                     }
                     onSwap={() => swapPairing(market.sourceMarketId)}
+                    onToggleEnabled={(enabled) => void toggleGameEnabled(market, enabled)}
                     runtime={runtimeMarkets[market.sourceMarketId]}
                     tape={tape[market.sourceMarketId]}
                   />

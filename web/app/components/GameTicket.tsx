@@ -10,6 +10,7 @@ import type {
   RuntimeMarket,
   TradingMode,
 } from "@/lib/api";
+import { complementBuyPricesOnTick } from "@/lib/complement-prices";
 
 function cents(value: number): string {
   return `${(value * 100).toFixed(value * 100 >= 10 ? 0 : 1)}¢`;
@@ -40,6 +41,10 @@ export function GameTicket({
   onCancel,
   onReplace,
   onSwap,
+  enabled,
+  autoFollow,
+  autoReturnRate,
+  onToggleEnabled,
 }: {
   market: PreviewMarket;
   mappedOutcomes: [string, string];
@@ -51,6 +56,10 @@ export function GameTicket({
   defaultShares: number;
   defaultLayers: number;
   defaultSpacing: number;
+  enabled: boolean;
+  autoFollow: boolean;
+  autoReturnRate: number;
+  onToggleEnabled: (enabled: boolean) => void;
   onPlace: (input: {
     outcome: string;
     price: number;
@@ -73,10 +82,21 @@ export function GameTicket({
   const outcome = market.outcomes[sideIndex];
   const mapped = mappedOutcomes[sideIndex] ?? outcome?.suggestedPolymarketOutcome;
   const book = mapped ? tape?.books[mapped] : undefined;
-  const recommended = outcome?.recommendedBuyPrice ?? null;
+  const autoPrices = complementBuyPricesOnTick(
+    market.outcomes[0]?.fairProbability ?? 0,
+    market.outcomes[1]?.fairProbability ?? 0,
+    autoReturnRate,
+    market.tickSize,
+  );
+  const autoActive = autoFollow && enabled && runtime?.quoteMode !== "manual";
+  const recommended = autoFollow
+    ? (autoPrices[sideIndex] ?? outcome?.recommendedBuyPrice ?? null)
+    : (outcome?.recommendedBuyPrice ?? null);
   const bestBid = book?.bids[0]?.price ?? null;
   const bestAsk = book?.asks[0]?.price ?? null;
   const suggested = recommended ?? (bestBid !== null ? bestBid + market.tickSize : bestAsk);
+  const combinedAuto =
+    autoPrices[0] !== null && autoPrices[1] !== null ? autoPrices[0] + autoPrices[1] : null;
   const price =
     priceCents === ""
       ? (suggested ?? 0)
@@ -113,9 +133,30 @@ export function GameTicket({
           <h3 className="mt-1.5 m-0 text-[15px] font-semibold">{market.name}</h3>
           <p className="mt-1 mb-0 font-mono text-[11px] text-mute-2">{market.polymarketSlug}</p>
         </div>
-        <Button onClick={onSwap} variant="ghost">
-          交换配对
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-2 text-[13px]">
+            <input
+              checked={enabled}
+              disabled={!market.tradable || busy}
+              onChange={(event) => onToggleEnabled(event.target.checked)}
+              type="checkbox"
+            />
+            {market.tradable ? (autoFollow ? "自动跟赔" : "启用") : "不可交易"}
+          </label>
+          {autoActive ? (
+            <span className="rounded-md border border-gold/25 bg-gold/10 px-2 py-0.5 font-mono text-[11px] font-semibold text-gold">
+              自动 {(autoReturnRate * 100).toFixed(0)}%
+            </span>
+          ) : null}
+          {runtime?.quoteMode === "manual" ? (
+            <span className="rounded-md border border-line px-2 py-0.5 font-mono text-[11px] text-mute">
+              手动锁价
+            </span>
+          ) : null}
+          <Button onClick={onSwap} variant="ghost">
+            交换配对
+          </Button>
+        </div>
       </header>
 
       <div className="grid grid-cols-2 gap-2 p-3">
@@ -146,11 +187,15 @@ export function GameTicket({
                   index === 0 ? "text-sage" : "text-rose"
                 }`}
               >
-                {last ? cents(last) : "—"}
+                {(autoFollow ? autoPrices[index] : last)
+                  ? cents((autoFollow ? autoPrices[index] : last) as number)
+                  : "—"}
               </b>
               <small className="mt-1 block text-[11px] text-mute">
-                源 {(item.fairProbability * 100).toFixed(1)}% · 推荐{" "}
-                {item.recommendedBuyPrice ? cents(item.recommendedBuyPrice) : "—"}
+                源 {(item.fairProbability * 100).toFixed(1)}% ·{" "}
+                {autoFollow
+                  ? `自动 ${autoPrices[index] ? cents(autoPrices[index]) : "—"}`
+                  : `推荐 ${item.recommendedBuyPrice ? cents(item.recommendedBuyPrice) : "—"}`}
               </small>
             </button>
           );
@@ -204,79 +249,124 @@ export function GameTicket({
         </section>
 
         <section className="bg-panel px-4 py-4">
-          <div className="mb-3 flex items-center justify-between">
-            <strong className="text-[13px]">Buy {outcome?.sourceName}</strong>
-            <span className="text-[11px] text-mute">Limit</span>
-          </div>
-          <label className="mb-3 grid gap-1.5 text-[11px] text-mute">
-            价格（推荐 {suggested ? cents(suggested) : "—"}）
-            <input
-              className={inputClass}
-              min={1}
-              onChange={(event) => setPriceCents(Number(event.target.value))}
-              step={market.tickSize * 100}
-              type="number"
-              value={priceCents === "" ? Math.round((suggested ?? 0) * 1000) / 10 : priceCents}
-            />
-          </label>
-          <label className="mb-3 grid gap-1.5 text-[11px] text-mute">
-            Shares
-            <input
-              className={inputClass}
-              min={market.minOrderSize}
-              onChange={(event) => setShares(Number(event.target.value))}
-              step={1}
-              type="number"
-              value={shares}
-            />
-          </label>
-          <div className="mb-3 grid grid-cols-2 gap-2">
-            <label className="grid gap-1.5 text-[11px] text-mute">
-              层数
-              <input
-                className={inputClass}
-                max={10}
-                min={1}
-                onChange={(event) => setLayers(Number(event.target.value))}
-                type="number"
-                value={layers}
-              />
-            </label>
-            <label className="grid gap-1.5 text-[11px] text-mute">
-              层间距 tick
-              <input
-                className={inputClass}
-                min={1}
-                onChange={(event) => setSpacing(Number(event.target.value))}
-                type="number"
-                value={spacing}
-              />
-            </label>
-          </div>
-          <p className="mt-0 mb-3 text-[11px] leading-relaxed text-mute">
-            将在 {layerPreview.map((value) => cents(value)).join(" / ")} 挂 {shares} shares · 约 $
-            {notional.toFixed(2)}
-          </p>
-          {!makerRunning ? (
-            <p className="mt-0 mb-3 text-[12px] text-amber">先保存并启动核心后才能一键挂单。</p>
-          ) : mode === "shadow" ? (
-            <p className="mt-0 mb-3 text-[12px] text-amber">Shadow 只读，请用 Paper 或 Live。</p>
+          {autoFollow ? (
+            <p className="mt-0 mb-3 rounded-lg border border-gold/20 bg-gold/10 px-3 py-2 text-[12px] leading-relaxed text-ink">
+              双边自动买价合计 {combinedAuto ? cents(combinedAuto) : "—"}，目标{" "}
+              {(autoReturnRate * 100).toFixed(0)}%。源赔率变动超过当前挂价后自动改价。
+              {runtime?.reason ? ` 当前：${runtime.reason}` : ""}
+            </p>
           ) : null}
-          <Button
-            className="w-full"
-            disabled={busy || !canTrade || !mapped || !price || shares < market.minOrderSize}
-            onClick={() =>
-              void onPlace({
-                outcome: mapped as string,
-                price,
-                shares,
-                layers,
-                spacingTicks: spacing,
-              })
-            }
-          >
-            一键挂单 Buy {outcome?.sourceName}
-          </Button>
+          <div className="mb-3 flex items-center justify-between">
+            <strong className="text-[13px]">
+              {autoActive ? "自动双边" : `Buy ${outcome?.sourceName}`}
+            </strong>
+            <span className="text-[11px] text-mute">{autoActive ? "跟源赔率" : "Limit"}</span>
+          </div>
+          {autoActive ? (
+            <div className="grid gap-2">
+              {market.outcomes.map((item, index) => (
+                <div
+                  className="flex items-center justify-between rounded-lg border border-line bg-inset px-3 py-2 text-[13px]"
+                  key={item.sourceOddId}
+                >
+                  <span>{item.sourceName}</span>
+                  <strong className="tabular-nums">
+                    {autoPrices[index] ? cents(autoPrices[index] as number) : "—"}
+                  </strong>
+                </div>
+              ))}
+              {(runtime?.plannedQuotes ?? []).length > 0 ? (
+                <p className="mt-1 mb-0 text-[12px] text-mute">
+                  当前挂{" "}
+                  {runtime?.plannedQuotes
+                    .map((quote) => `${quote.outcome} ${cents(quote.price)}`)
+                    .join(" / ")}
+                </p>
+              ) : (
+                <p className="mt-1 mb-0 text-[12px] text-mute">
+                  {runtime?.reason
+                    ? `等待解锁：${runtime.reason}`
+                    : makerRunning
+                      ? "已勾选，等待源赔率驱动挂单。"
+                      : "勾选后请保存并启动核心。"}
+                </p>
+              )}
+            </div>
+          ) : (
+            <>
+              <label className="mb-3 grid gap-1.5 text-[11px] text-mute">
+                价格（推荐 {suggested ? cents(suggested) : "—"}）
+                <input
+                  className={inputClass}
+                  min={1}
+                  onChange={(event) => setPriceCents(Number(event.target.value))}
+                  step={market.tickSize * 100}
+                  type="number"
+                  value={priceCents === "" ? Math.round((suggested ?? 0) * 1000) / 10 : priceCents}
+                />
+              </label>
+              <label className="mb-3 grid gap-1.5 text-[11px] text-mute">
+                Shares
+                <input
+                  className={inputClass}
+                  min={market.minOrderSize}
+                  onChange={(event) => setShares(Number(event.target.value))}
+                  step={1}
+                  type="number"
+                  value={shares}
+                />
+              </label>
+              <div className="mb-3 grid grid-cols-2 gap-2">
+                <label className="grid gap-1.5 text-[11px] text-mute">
+                  层数
+                  <input
+                    className={inputClass}
+                    max={10}
+                    min={1}
+                    onChange={(event) => setLayers(Number(event.target.value))}
+                    type="number"
+                    value={layers}
+                  />
+                </label>
+                <label className="grid gap-1.5 text-[11px] text-mute">
+                  层间距 tick
+                  <input
+                    className={inputClass}
+                    min={1}
+                    onChange={(event) => setSpacing(Number(event.target.value))}
+                    type="number"
+                    value={spacing}
+                  />
+                </label>
+              </div>
+              <p className="mt-0 mb-3 text-[11px] leading-relaxed text-mute">
+                将在 {layerPreview.map((value) => cents(value)).join(" / ")} 挂 {shares} shares · 约
+                ${notional.toFixed(2)}
+              </p>
+              {!makerRunning ? (
+                <p className="mt-0 mb-3 text-[12px] text-amber">先保存并启动核心后才能一键挂单。</p>
+              ) : mode === "shadow" ? (
+                <p className="mt-0 mb-3 text-[12px] text-amber">
+                  Shadow 只读，请用 Paper 或 Live。
+                </p>
+              ) : null}
+              <Button
+                className="w-full"
+                disabled={busy || !canTrade || !mapped || !price || shares < market.minOrderSize}
+                onClick={() =>
+                  void onPlace({
+                    outcome: mapped as string,
+                    price,
+                    shares,
+                    layers,
+                    spacingTicks: spacing,
+                  })
+                }
+              >
+                一键挂单 Buy {outcome?.sourceName}
+              </Button>
+            </>
+          )}
         </section>
       </div>
 

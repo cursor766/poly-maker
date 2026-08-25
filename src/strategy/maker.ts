@@ -97,6 +97,20 @@ function clampPrice(value: number, tick: number): number {
   return Math.min(1 - tick, Math.max(tick, value));
 }
 
+export function complementTargetBuyPrices(
+  firstFair: number,
+  secondFair: number,
+  targetReturnRate: number,
+): readonly [number, number] | undefined {
+  const total = firstFair + secondFair;
+  if (!Number.isFinite(total) || total <= 0 || targetReturnRate <= 0) return undefined;
+  const askTotal = 1 / targetReturnRate;
+  const firstAsk = (firstFair / total) * askTotal;
+  const secondAsk = (secondFair / total) * askTotal;
+  if (firstAsk <= 0 || firstAsk >= 1 || secondAsk <= 0 || secondAsk >= 1) return undefined;
+  return [1 - secondAsk, 1 - firstAsk];
+}
+
 export function buildManualBuyQuotes(input: {
   outcome: string;
   tokenId: string;
@@ -195,17 +209,12 @@ export function generateComplementBuyQuotes(
   if (firstFair === undefined || secondFair === undefined) {
     throw new Error("missing fair probabilities for complementary quotes");
   }
-  const total = firstFair + secondFair;
-  if (!Number.isFinite(total) || total <= 0) return [];
-
-  const targetAskTotal = 1 / parameters.targetReturnRate;
-  const targetAsks = [
-    (firstFair / total) * targetAskTotal,
-    (secondFair / total) * targetAskTotal,
-  ] as const;
-  if (targetAsks.some((price) => price <= 0 || price >= 1)) return [];
-
-  const rawBuyPrices = [1 - targetAsks[1], 1 - targetAsks[0]] as const;
+  const rawBuyPrices = complementTargetBuyPrices(
+    firstFair,
+    secondFair,
+    parameters.targetReturnRate,
+  );
+  if (!rawBuyPrices) return [];
   const existingExposure = [...positions.byToken.values()].reduce(
     (sum, position) => sum + Math.max(0, position),
     0,
