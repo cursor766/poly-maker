@@ -97,6 +97,37 @@ function clampPrice(value: number, tick: number): number {
   return Math.min(1 - tick, Math.max(tick, value));
 }
 
+export function buildManualBuyQuotes(input: {
+  outcome: string;
+  tokenId: string;
+  price: number;
+  shares: number;
+  layers: number;
+  spacingTicks: number;
+  tickSize: number;
+  minOrderSize: number;
+}): Quote[] {
+  const tick = input.tickSize;
+  const layers = Math.max(1, Math.min(10, Math.floor(input.layers)));
+  const spacing = Math.max(1, Math.floor(input.spacingTicks));
+  const size = Math.max(input.minOrderSize, Math.floor(input.shares * 100) / 100);
+  const quotes: Quote[] = [];
+  let previous = Number.POSITIVE_INFINITY;
+  for (let level = 0; level < layers; level += 1) {
+    const price = clampPrice(floorToTick(input.price - level * spacing * tick, tick), tick);
+    if (price >= previous) continue;
+    previous = price;
+    quotes.push({
+      tokenId: input.tokenId,
+      outcome: input.outcome,
+      side: "BUY",
+      price,
+      size,
+    });
+  }
+  return quotes;
+}
+
 export function generateMakerQuotes(
   market: ResolvedMarket,
   fairByOutcome: ReadonlyMap<string, number>,

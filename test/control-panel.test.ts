@@ -203,6 +203,8 @@ test("preview only keeps pure winner markets for each round", () => {
     markets.map((item) => item.sourceMarketId),
     ["match-winner", "game1"],
   );
+  assert.equal(markets[1]?.conditionId, "c1");
+  assert.deepEqual(markets[1]?.tokenIds, ["t2", "t3"]);
 });
 
 test("preview pairs map handicap and totals by line instead of round", () => {

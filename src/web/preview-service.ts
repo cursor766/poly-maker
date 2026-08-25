@@ -24,6 +24,8 @@ export interface PreviewMarket {
   line: number | null;
   sourceMarketId: string;
   polymarketSlug: string;
+  conditionId: string;
+  tokenIds: readonly [string, string];
   polymarketOutcomes: readonly [string, string];
   tickSize: number;
   minOrderSize: number;
@@ -295,6 +297,8 @@ export function buildMarkets(
       line,
       sourceMarketId: source.marketId,
       polymarketSlug: polymarket.slug,
+      conditionId: polymarket.conditionId,
+      tokenIds: polymarket.tokenIds,
       polymarketOutcomes: polymarket.outcomes,
       tickSize: polymarket.tickSize,
       minOrderSize: polymarket.minOrderSize,

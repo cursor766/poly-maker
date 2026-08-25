@@ -21,6 +21,8 @@ export interface PreviewMarket {
   minOrderSize: number;
   tradable: boolean;
   overround: number;
+  conditionId?: string;
+  tokenIds?: [string, string];
   outcomes: [PreviewOutcome, PreviewOutcome];
 }
 
@@ -65,7 +67,7 @@ export interface RuntimeMarket {
   quoteNote?: string;
   tickSize?: number;
   targetReturnRate?: number;
-  quoteMode?: "two-sided" | "complement-buy" | "top-of-book";
+  quoteMode?: "two-sided" | "complement-buy" | "top-of-book" | "manual";
   sourceOpen: boolean | null;
   sourceLocked: boolean;
   fairPrices: Record<string, number>;
@@ -221,6 +223,24 @@ export interface DeskMarketSnapshot {
 
 export interface DeskSnapshot {
   markets: Record<string, DeskMarketSnapshot>;
+}
+
+export interface MarketTapeBook {
+  bids: Array<{ price: number; size: number }>;
+  asks: Array<{ price: number; size: number }>;
+  receivedAt: number;
+}
+
+export interface MarketTapeSnapshot {
+  sourceMarketId: string;
+  conditionId: string;
+  books: Record<string, MarketTapeBook>;
+  trades: DeskTrade[];
+  error?: string;
+}
+
+export interface MarketTapeResponse {
+  markets: Record<string, MarketTapeSnapshot>;
 }
 
 export const controlApiUrl = process.env.NEXT_PUBLIC_CONTROL_API ?? "http://127.0.0.1:48787";

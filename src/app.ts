@@ -55,6 +55,7 @@ interface MarketRuntime {
   lockEpoch: number;
   requiresSourceReopen: boolean;
   operatorPaused: boolean;
+  manualQuotes: Quote[] | undefined;
   lastBooks: ReadonlyMap<string, TokenBook> | undefined;
   protection: Promise<void> | undefined;
 }
@@ -293,6 +294,7 @@ export class MakerApp {
       lockEpoch: Date.now(),
       requiresSourceReopen: false,
       operatorPaused: false,
+      manualQuotes: undefined,
       lastBooks: undefined,
       protection: undefined,
     };
@@ -315,6 +317,7 @@ export class MakerApp {
         this.lockReasons.delete(runtime.mapping.sourceMarketId);
         this.rejectDetails.delete(runtime.mapping.sourceMarketId);
         this.quoteNotes.delete(runtime.mapping.sourceMarketId);
+        // drop manual quotes with the runtime
       }
 
       for (const mapping of nextActive) {
@@ -596,6 +599,13 @@ export class MakerApp {
     }
 
     try {
+      if (runtime.manualQuotes && runtime.manualQuotes.length > 0) {
+        this.plannedQuotes.set(runtime.mapping.sourceMarketId, runtime.manualQuotes);
+        this.quoteNotes.set(runtime.mapping.sourceMarketId, "操作员手动挂单");
+        await runtime.executor.reconcile(runtime.market, runtime.manualQuotes, books);
+        this.rejectDetails.delete(runtime.mapping.sourceMarketId);
+        return;
+      }
       const fairByOutcome = mapFairProbabilities(runtime.mapping, runtime.market, fair);
       const complementParameters = {
         targetReturnRate:
@@ -722,6 +732,7 @@ export class MakerApp {
     }
     if (command.action === "pause") {
       runtime.operatorPaused = true;
+      runtime.manualQuotes = undefined;
       await this.protectRuntime(runtime, "operator-paused");
       await this.audit.write("operator_pause", {
         sourceMarketId: command.sourceMarketId,
@@ -731,6 +742,7 @@ export class MakerApp {
     }
     if (command.action === "resume") {
       runtime.operatorPaused = false;
+      runtime.manualQuotes = undefined;
       if (this.lockReasons.get(command.sourceMarketId) === "operator-paused") {
         this.lockReasons.delete(command.sourceMarketId);
       }
@@ -747,12 +759,114 @@ export class MakerApp {
       });
       return;
     }
+    if (command.action === "place") {
+      const quotes = (command.quotes ?? []).flatMap((item) => {
+        const tokenId = runtime.market.tokenIds[runtime.market.outcomes.indexOf(item.outcome)];
+        if (!tokenId) return [];
+        return [
+          {
+            tokenId,
+            outcome: item.outcome,
+            side: "BUY" as const,
+            price: item.price,
+            size: item.size,
+          },
+        ];
+      });
+      if (quotes.length === 0) {
+        this.logger.warn({ command }, "desk place ignored; no matching outcomes");
+        return;
+      }
+      runtime.operatorPaused = false;
+      runtime.manualQuotes = quotes;
+      this.plannedQuotes.set(command.sourceMarketId, quotes);
+      this.quoteNotes.set(command.sourceMarketId, "操作员手动挂单");
+      if (this.lockReasons.get(command.sourceMarketId) === "operator-paused") {
+        this.lockReasons.delete(command.sourceMarketId);
+      }
+      const fair = this.latestFair.get(command.sourceMarketId);
+      if (fair && runtime.lastBooks && this.canUnlock(runtime, fair, runtime.lastBooks)) {
+        runtime.executor.unlock();
+        runtime.requiresSourceReopen = false;
+      }
+      if (!runtime.executor.locked && runtime.lastBooks) {
+        await runtime.executor.reconcile(runtime.market, quotes, runtime.lastBooks);
+      }
+      await this.audit.write("operator_place", {
+        sourceMarketId: command.sourceMarketId,
+        commandId: command.id,
+        quotes,
+      });
+      return;
+    }
+    if (command.action === "replace") {
+      const open = runtime.executor.listRestingOrders();
+      const target = open.find((order) => order.id === command.orderId);
+      if (!target || command.price === undefined) {
+        this.logger.warn({ command }, "desk replace ignored; order not found");
+        return;
+      }
+      const outcome =
+        runtime.market.outcomes[runtime.market.tokenIds.indexOf(target.tokenId)] ?? target.tokenId;
+      const nextQuotes = (runtime.manualQuotes ?? this.quotesFromOpenOrders(runtime)).map(
+        (quote) =>
+          quote.tokenId === target.tokenId &&
+          quote.side === target.side &&
+          Math.abs(quote.price - target.price) < 1e-8
+            ? {
+                ...quote,
+                outcome,
+                price: command.price ?? quote.price,
+                size: command.size ?? quote.size,
+              }
+            : quote,
+      );
+      runtime.manualQuotes = nextQuotes;
+      this.plannedQuotes.set(command.sourceMarketId, nextQuotes);
+      if (!runtime.executor.locked && runtime.lastBooks) {
+        await runtime.executor.reconcile(runtime.market, nextQuotes, runtime.lastBooks);
+      }
+      await this.audit.write("operator_replace", {
+        sourceMarketId: command.sourceMarketId,
+        commandId: command.id,
+        orderId: command.orderId,
+        price: command.price,
+        size: command.size,
+      });
+      return;
+    }
+    if (command.orderIds && command.orderIds.length > 0 && runtime.manualQuotes) {
+      const open = runtime.executor.listRestingOrders();
+      const canceling = new Set(command.orderIds);
+      const cancelPrices = new Set(
+        open
+          .filter((order) => canceling.has(order.id))
+          .map((order) => `${order.tokenId}:${order.side}:${order.price.toFixed(4)}`),
+      );
+      runtime.manualQuotes = runtime.manualQuotes.filter(
+        (quote) => !cancelPrices.has(`${quote.tokenId}:${quote.side}:${quote.price.toFixed(4)}`),
+      );
+      if (runtime.manualQuotes.length === 0) runtime.manualQuotes = undefined;
+    } else if (!command.orderIds || command.orderIds.length === 0) {
+      runtime.manualQuotes = undefined;
+    }
     await runtime.executor.cancelOrders(command.orderIds ?? [], "operator-cancel");
     await this.audit.write("operator_cancel", {
       sourceMarketId: command.sourceMarketId,
       commandId: command.id,
       orderIds: command.orderIds ?? [],
     });
+  }
+
+  private quotesFromOpenOrders(runtime: MarketRuntime): Quote[] {
+    return runtime.executor.listRestingOrders().map((order) => ({
+      tokenId: order.tokenId,
+      outcome:
+        runtime.market.outcomes[runtime.market.tokenIds.indexOf(order.tokenId)] ?? order.tokenId,
+      side: order.side,
+      price: order.price,
+      size: Math.max(order.size - order.matchedSize, 0),
+    }));
   }
 
   private async protectRuntime(
@@ -840,7 +954,9 @@ export class MakerApp {
           tickSize: runtime.market.tickSize,
           targetReturnRate:
             runtime.mapping.targetReturnRate ?? this.runtimeLimits.makerTargetReturnRate,
-          quoteMode: runtime.mapping.quoteMode ?? "complement-buy",
+          quoteMode: runtime.manualQuotes
+            ? "manual"
+            : (runtime.mapping.quoteMode ?? "complement-buy"),
           sourceOpen: state ? state.open && state.visible && !state.suspended : null,
           sourceLocked: state ? state.suspended || !state.visible || !state.open : true,
           fairPrices: Object.fromEntries(

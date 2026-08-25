@@ -3,12 +3,17 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import { GameTicket } from "@/app/components/GameTicket";
 import { Button, errorClass, Field, inputClass, panelClass } from "@/app/components/ui";
 import {
   api,
+  type ControlStatus,
   type MarketMapping,
   type MarketPreview,
+  type MarketTapeResponse,
+  type MarketTapeSnapshot,
   type RuntimeLimits,
+  type RuntimeMarket,
   type TradingMode,
 } from "@/lib/api";
 import { estimateMarketBudget } from "@/lib/budget";
@@ -31,6 +36,34 @@ function marketKind(
   market: MarketPreview["markets"][number],
 ): NonNullable<MarketPreview["markets"][number]["kind"]> {
   return market.kind ?? (market.round === 0 ? "moneyline" : "child_moneyline");
+}
+
+function expandBuyQuotes(
+  price: number,
+  shares: number,
+  layers: number,
+  spacingTicks: number,
+  tickSize: number,
+  outcome: string,
+): Array<{ outcome: string; price: number; size: number }> {
+  const tick = tickSize;
+  const quotes: Array<{ outcome: string; price: number; size: number }> = [];
+  let previous = Number.POSITIVE_INFINITY;
+  for (let level = 0; level < Math.max(1, layers); level += 1) {
+    const next = Math.min(
+      1 - tick,
+      Math.max(tick, Math.floor((price - level * spacingTicks * tick + 1e-12) / tick) * tick),
+    );
+    if (next >= previous) continue;
+    previous = next;
+    quotes.push({ outcome, price: next, size: shares });
+  }
+  return quotes;
+}
+
+function isGameMarket(market: MarketPreview["markets"][number]): boolean {
+  const kind = marketKind(market);
+  return kind === "child_moneyline" || kind === "map_handicap" || kind === "totals";
 }
 
 function marketBadge(market: MarketPreview["markets"][number]): string {
@@ -88,6 +121,8 @@ export function MatchConfigDesk({
   const [preview, setPreview] = useState<MarketPreview | null>(null);
   const [forms, setForms] = useState<Record<string, MarketForm>>({});
   const [makerRunning, setMakerRunning] = useState(false);
+  const [runtimeMarkets, setRuntimeMarkets] = useState<Record<string, RuntimeMarket>>({});
+  const [tape, setTape] = useState<Record<string, MarketTapeSnapshot>>({});
   const [limits, setLimits] = useState<RuntimeLimits | null>(null);
   const [mode, setMode] = useState<TradingMode>("shadow");
   const [loading, setLoading] = useState(false);
@@ -96,10 +131,16 @@ export function MatchConfigDesk({
   const refreshMeta = useCallback(async () => {
     const [markets, status, nextLimits] = await Promise.all([
       api<{ mappings: MarketMapping[] }>("/api/markets"),
-      api<{ process: { running: boolean } }>("/api/status"),
+      api<ControlStatus>("/api/status"),
       api<RuntimeLimits>("/api/limits"),
     ]);
     setMakerRunning(status.process.running);
+    setRuntimeMarkets(
+      Object.fromEntries(
+        (status.runtime?.markets ?? []).map((market) => [market.sourceMarketId, market]),
+      ),
+    );
+    if (status.runtime?.mode) setMode(status.runtime.mode);
     setLimits(nextLimits);
     return { mappings: markets.mappings, limits: nextLimits };
   }, []);
@@ -130,6 +171,47 @@ export function MatchConfigDesk({
   useEffect(() => {
     void loadPreview();
   }, [loadPreview]);
+
+  useEffect(() => {
+    const gameMarkets = (preview?.markets ?? []).filter(
+      (market) => isGameMarket(market) && market.conditionId && market.tokenIds,
+    );
+    if (gameMarkets.length === 0) {
+      setTape({});
+      return;
+    }
+    let cancelled = false;
+    const loadTape = async () => {
+      try {
+        const next = await api<MarketTapeResponse>("/api/market-tape", {
+          method: "POST",
+          body: JSON.stringify({
+            markets: gameMarkets.map((market) => ({
+              sourceMarketId: market.sourceMarketId,
+              conditionId: market.conditionId,
+              slug: market.polymarketSlug,
+              tokenIds: market.tokenIds,
+              outcomes: market.polymarketOutcomes,
+              tickSize: market.tickSize,
+              minOrderSize: market.minOrderSize,
+            })),
+          }),
+        });
+        if (!cancelled) setTape(next.markets);
+      } catch {
+        if (!cancelled) setTape({});
+      }
+    };
+    void loadTape();
+    const timer = window.setInterval(() => {
+      void loadTape();
+      void refreshMeta();
+    }, 6000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [preview, refreshMeta]);
 
   function updateForm(marketId: string, patch: Partial<MarketForm>) {
     setForms((current) => ({
@@ -175,6 +257,107 @@ export function MatchConfigDesk({
     updateForm(marketId, { outcomes: [form.outcomes[1], form.outcomes[0]] });
   }
 
+  async function persistConfig(nextForms = forms) {
+    if (!preview) return;
+    await api("/api/config", {
+      method: "POST",
+      body: JSON.stringify({
+        sourceMatchId: preview.matchId,
+        polymarketEventSlug: preview.eventSlug,
+        sourceUrl,
+        polymarketUrl,
+        teams: preview.teams,
+        tournament: preview.tournament,
+        markets: preview.markets.map((market) => {
+          const form = nextForms[market.sourceMarketId] as MarketForm;
+          return {
+            name: `${preview.teams.join(" vs ")} - ${market.name}`,
+            enabled: form.enabled && market.tradable,
+            sourceMarketId: market.sourceMarketId,
+            polymarketSlug: market.polymarketSlug,
+            round: market.round,
+            outcomes: market.outcomes.map((outcome, index) => ({
+              sourceOddId: outcome.sourceOddId,
+              outcome: form.outcomes[index] as string,
+            })),
+            orderNotional: form.orderNotional,
+            quoteLevels: form.quoteLevels,
+            levelSpacingTicks: form.levelSpacingTicks,
+            targetReturnRate: form.targetReturnRate,
+            quoteMode: form.quoteMode,
+          };
+        }),
+      }),
+    });
+    await refreshMeta();
+  }
+
+  async function sendDeskCommand(body: Record<string, unknown>) {
+    setLoading(true);
+    setError("");
+    try {
+      await api("/api/desk/command", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      await refreshMeta();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function placeGameOrder(
+    market: MarketPreview["markets"][number],
+    input: {
+      outcome: string;
+      price: number;
+      shares: number;
+      layers: number;
+      spacingTicks: number;
+    },
+  ) {
+    const quotes = expandBuyQuotes(
+      input.price,
+      input.shares,
+      input.layers,
+      input.spacingTicks,
+      market.tickSize,
+      input.outcome,
+    );
+    if (quotes.length === 0) return;
+    setLoading(true);
+    setError("");
+    try {
+      const nextForms = {
+        ...forms,
+        [market.sourceMarketId]: {
+          ...forms[market.sourceMarketId],
+          enabled: true,
+          orderNotional: Number((input.price * input.shares).toFixed(2)),
+          quoteLevels: input.layers,
+          levelSpacingTicks: input.spacingTicks,
+        },
+      };
+      setForms(nextForms);
+      await persistConfig(nextForms);
+      if (!makerRunning) {
+        setError("已启用该小局。请先保存并启动核心，然后再点一键挂单。");
+        return;
+      }
+      await sendDeskCommand({
+        action: "place",
+        sourceMarketId: market.sourceMarketId,
+        quotes,
+      });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function save(action: "save" | "start") {
     if (!preview) return;
     if (action === "start" && mode === "live") {
@@ -186,36 +369,7 @@ export function MatchConfigDesk({
     setLoading(true);
     setError("");
     try {
-      await api("/api/config", {
-        method: "POST",
-        body: JSON.stringify({
-          sourceMatchId: preview.matchId,
-          polymarketEventSlug: preview.eventSlug,
-          sourceUrl,
-          polymarketUrl,
-          teams: preview.teams,
-          tournament: preview.tournament,
-          markets: preview.markets.map((market) => {
-            const form = forms[market.sourceMarketId] as MarketForm;
-            return {
-              name: `${preview.teams.join(" vs ")} - ${market.name}`,
-              enabled: form.enabled && market.tradable,
-              sourceMarketId: market.sourceMarketId,
-              polymarketSlug: market.polymarketSlug,
-              round: market.round,
-              outcomes: market.outcomes.map((outcome, index) => ({
-                sourceOddId: outcome.sourceOddId,
-                outcome: form.outcomes[index] as string,
-              })),
-              orderNotional: form.orderNotional,
-              quoteLevels: form.quoteLevels,
-              levelSpacingTicks: form.levelSpacingTicks,
-              targetReturnRate: form.targetReturnRate,
-              quoteMode: form.quoteMode,
-            };
-          }),
-        }),
-      });
+      await persistConfig();
       if (action === "start") {
         await api("/api/start", {
           method: "POST",
@@ -224,7 +378,6 @@ export function MatchConfigDesk({
         router.push("/dashboard");
         return;
       }
-      await refreshMeta();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -304,8 +457,8 @@ export function MatchConfigDesk({
               <div>
                 <h2 className="m-0 text-lg font-medium">盘口与挂单参数</h2>
                 <p className="mt-1.5 text-sm leading-relaxed text-mute">
-                  BO7 可勾选 G1–G6 局胜者，以及 +3.5 地图让分 / 地图总数。目标回报 80% 通常挂不进
-                  KPL 买一，贴近盘口请用约 95%。
+                  全场仍用参数卡。小局是 Polymarket 风格交易台：订单簿、activity、推荐价、shares
+                  和多层一键挂单。Shadow 只读，Paper / Live 才会真正挂上。
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -414,156 +567,201 @@ export function MatchConfigDesk({
                   未找到源站与 Polymarket 可对应的胜负 / 让分 / 总数盘口。
                 </div>
               )}
-              {preview.markets.map((market) => {
+              {preview.markets
+                .filter((market) => !isGameMarket(market))
+                .map((market) => {
+                  const form = forms[market.sourceMarketId];
+                  if (!form) return null;
+                  return (
+                    <article
+                      className="rounded-[14px] border border-line bg-inset p-4"
+                      key={market.sourceMarketId}
+                    >
+                      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                        <div className="flex items-start gap-3">
+                          <span className="mt-0.5 rounded-md border border-gold/25 bg-gold/10 px-2 py-1 font-mono text-[11px] font-semibold text-gold">
+                            {marketBadge(market)}
+                          </span>
+                          <div>
+                            <strong className="block">{market.name}</strong>
+                            <small className="mt-1 block font-mono text-[11px] text-mute-2">
+                              {market.polymarketSlug}
+                            </small>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <Button
+                            onClick={() => swapPairing(market.sourceMarketId)}
+                            variant="ghost"
+                          >
+                            交换队伍配对
+                          </Button>
+                          <label className="flex items-center gap-2 text-sm">
+                            <input
+                              type="checkbox"
+                              checked={form.enabled}
+                              disabled={!market.tradable}
+                              onChange={(event) =>
+                                updateForm(market.sourceMarketId, { enabled: event.target.checked })
+                              }
+                            />
+                            {market.tradable ? "启用" : "不可交易"}
+                          </label>
+                        </div>
+                      </div>
+                      <div className="grid gap-2.5 md:grid-cols-2 xl:grid-cols-4">
+                        {market.outcomes.map((outcome, index) => (
+                          <div
+                            className="rounded-[10px] border border-line bg-raised p-3"
+                            key={outcome.sourceOddId}
+                          >
+                            <div className="mb-2 flex items-center justify-between gap-2">
+                              <span className="text-sm">{outcome.sourceName}</span>
+                              <b className="font-display text-lg text-gold">
+                                {outcome.recommendedBuyPrice === null
+                                  ? "—"
+                                  : `${Math.round(outcome.recommendedBuyPrice * 100)}¢`}
+                              </b>
+                            </div>
+                            <select
+                              className={inputClass}
+                              aria-label={`${outcome.sourceName} 对应 Polymarket outcome`}
+                              value={form.outcomes[index]}
+                              onChange={(event) => {
+                                const outcomes = [...form.outcomes] as [string, string];
+                                outcomes[index] = event.target.value;
+                                updateForm(market.sourceMarketId, { outcomes });
+                              }}
+                            >
+                              {market.polymarketOutcomes.map((name) => (
+                                <option key={name} value={name}>
+                                  对应 {name}
+                                </option>
+                              ))}
+                            </select>
+                            <div className="mt-2 font-mono text-[11px] text-mute-2">
+                              源赔率 {outcome.decimalOdd.toFixed(3)} · 公平概率{" "}
+                              {(outcome.fairProbability * 100).toFixed(1)}%
+                            </div>
+                          </div>
+                        ))}
+                        <Field htmlFor={`notional-${market.sourceMarketId}`} label="每层额度 ($)">
+                          <input
+                            className={inputClass}
+                            id={`notional-${market.sourceMarketId}`}
+                            type="number"
+                            min="1"
+                            step="0.5"
+                            value={form.orderNotional}
+                            onChange={(event) =>
+                              updateForm(market.sourceMarketId, {
+                                orderNotional: Number(event.target.value),
+                              })
+                            }
+                          />
+                        </Field>
+                        <Field htmlFor={`levels-${market.sourceMarketId}`} label="层数">
+                          <input
+                            className={inputClass}
+                            id={`levels-${market.sourceMarketId}`}
+                            type="number"
+                            min="1"
+                            max="10"
+                            value={form.quoteLevels}
+                            onChange={(event) =>
+                              updateForm(market.sourceMarketId, {
+                                quoteLevels: Number(event.target.value),
+                              })
+                            }
+                          />
+                        </Field>
+                        <Field htmlFor={`spacing-${market.sourceMarketId}`} label="层间距 (tick)">
+                          <input
+                            className={inputClass}
+                            id={`spacing-${market.sourceMarketId}`}
+                            type="number"
+                            min="1"
+                            value={form.levelSpacingTicks}
+                            onChange={(event) =>
+                              updateForm(market.sourceMarketId, {
+                                levelSpacingTicks: Number(event.target.value),
+                              })
+                            }
+                          />
+                        </Field>
+                        <Field htmlFor={`return-${market.sourceMarketId}`} label="目标回报 %">
+                          <input
+                            className={inputClass}
+                            id={`return-${market.sourceMarketId}`}
+                            type="number"
+                            min="50"
+                            max="99"
+                            step="1"
+                            value={Math.round(form.targetReturnRate * 100)}
+                            onChange={(event) =>
+                              updateForm(market.sourceMarketId, {
+                                targetReturnRate: Number(event.target.value) / 100,
+                              })
+                            }
+                          />
+                        </Field>
+                        <Field htmlFor={`mode-${market.sourceMarketId}`} label="报价模式">
+                          <select
+                            className={inputClass}
+                            id={`mode-${market.sourceMarketId}`}
+                            value={form.quoteMode}
+                            onChange={(event) =>
+                              updateForm(market.sourceMarketId, {
+                                quoteMode: event.target.value as MarketForm["quoteMode"],
+                              })
+                            }
+                          >
+                            <option value="top-of-book">买一排队</option>
+                            <option value="complement-buy">互补限价</option>
+                          </select>
+                        </Field>
+                      </div>
+                    </article>
+                  );
+                })}
+              {preview.markets.filter(isGameMarket).map((market) => {
                 const form = forms[market.sourceMarketId];
                 if (!form) return null;
                 return (
-                  <article
-                    className="rounded-[14px] border border-line bg-inset p-4"
+                  <GameTicket
+                    busy={loading}
+                    defaultLayers={form.quoteLevels}
+                    defaultShares={Math.max(market.minOrderSize, form.orderNotional)}
+                    defaultSpacing={form.levelSpacingTicks}
                     key={market.sourceMarketId}
-                  >
-                    <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-                      <div className="flex items-start gap-3">
-                        <span className="mt-0.5 rounded-md border border-gold/25 bg-gold/10 px-2 py-1 font-mono text-[11px] font-semibold text-gold">
-                          {marketBadge(market)}
-                        </span>
-                        <div>
-                          <strong className="block">{market.name}</strong>
-                          <small className="mt-1 block font-mono text-[11px] text-mute-2">
-                            {market.polymarketSlug}
-                          </small>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <Button onClick={() => swapPairing(market.sourceMarketId)} variant="ghost">
-                          交换队伍配对
-                        </Button>
-                        <label className="flex items-center gap-2 text-sm">
-                          <input
-                            type="checkbox"
-                            checked={form.enabled}
-                            disabled={!market.tradable}
-                            onChange={(event) =>
-                              updateForm(market.sourceMarketId, { enabled: event.target.checked })
-                            }
-                          />
-                          {market.tradable ? "启用" : "不可交易"}
-                        </label>
-                      </div>
-                    </div>
-                    <div className="grid gap-2.5 md:grid-cols-2 xl:grid-cols-4">
-                      {market.outcomes.map((outcome, index) => (
-                        <div
-                          className="rounded-[10px] border border-line bg-raised p-3"
-                          key={outcome.sourceOddId}
-                        >
-                          <div className="mb-2 flex items-center justify-between gap-2">
-                            <span className="text-sm">{outcome.sourceName}</span>
-                            <b className="font-display text-lg text-gold">
-                              {outcome.recommendedBuyPrice === null
-                                ? "—"
-                                : `${Math.round(outcome.recommendedBuyPrice * 100)}¢`}
-                            </b>
-                          </div>
-                          <select
-                            className={inputClass}
-                            aria-label={`${outcome.sourceName} 对应 Polymarket outcome`}
-                            value={form.outcomes[index]}
-                            onChange={(event) => {
-                              const outcomes = [...form.outcomes] as [string, string];
-                              outcomes[index] = event.target.value;
-                              updateForm(market.sourceMarketId, { outcomes });
-                            }}
-                          >
-                            {market.polymarketOutcomes.map((name) => (
-                              <option key={name} value={name}>
-                                对应 {name}
-                              </option>
-                            ))}
-                          </select>
-                          <div className="mt-2 font-mono text-[11px] text-mute-2">
-                            源赔率 {outcome.decimalOdd.toFixed(3)} · 公平概率{" "}
-                            {(outcome.fairProbability * 100).toFixed(1)}%
-                          </div>
-                        </div>
-                      ))}
-                      <Field htmlFor={`notional-${market.sourceMarketId}`} label="每层额度 ($)">
-                        <input
-                          className={inputClass}
-                          id={`notional-${market.sourceMarketId}`}
-                          type="number"
-                          min="1"
-                          step="0.5"
-                          value={form.orderNotional}
-                          onChange={(event) =>
-                            updateForm(market.sourceMarketId, {
-                              orderNotional: Number(event.target.value),
-                            })
-                          }
-                        />
-                      </Field>
-                      <Field htmlFor={`levels-${market.sourceMarketId}`} label="层数">
-                        <input
-                          className={inputClass}
-                          id={`levels-${market.sourceMarketId}`}
-                          type="number"
-                          min="1"
-                          max="10"
-                          value={form.quoteLevels}
-                          onChange={(event) =>
-                            updateForm(market.sourceMarketId, {
-                              quoteLevels: Number(event.target.value),
-                            })
-                          }
-                        />
-                      </Field>
-                      <Field htmlFor={`spacing-${market.sourceMarketId}`} label="层间距 (tick)">
-                        <input
-                          className={inputClass}
-                          id={`spacing-${market.sourceMarketId}`}
-                          type="number"
-                          min="1"
-                          value={form.levelSpacingTicks}
-                          onChange={(event) =>
-                            updateForm(market.sourceMarketId, {
-                              levelSpacingTicks: Number(event.target.value),
-                            })
-                          }
-                        />
-                      </Field>
-                      <Field htmlFor={`return-${market.sourceMarketId}`} label="目标回报 %">
-                        <input
-                          className={inputClass}
-                          id={`return-${market.sourceMarketId}`}
-                          type="number"
-                          min="50"
-                          max="99"
-                          step="1"
-                          value={Math.round(form.targetReturnRate * 100)}
-                          onChange={(event) =>
-                            updateForm(market.sourceMarketId, {
-                              targetReturnRate: Number(event.target.value) / 100,
-                            })
-                          }
-                        />
-                      </Field>
-                      <Field htmlFor={`mode-${market.sourceMarketId}`} label="报价模式">
-                        <select
-                          className={inputClass}
-                          id={`mode-${market.sourceMarketId}`}
-                          value={form.quoteMode}
-                          onChange={(event) =>
-                            updateForm(market.sourceMarketId, {
-                              quoteMode: event.target.value as MarketForm["quoteMode"],
-                            })
-                          }
-                        >
-                          <option value="top-of-book">买一排队</option>
-                          <option value="complement-buy">互补限价</option>
-                        </select>
-                      </Field>
-                    </div>
-                  </article>
+                    makerRunning={makerRunning}
+                    mappedOutcomes={form.outcomes}
+                    market={market}
+                    mode={mode}
+                    onCancel={(orderId) =>
+                      sendDeskCommand({
+                        action: "cancel",
+                        sourceMarketId: market.sourceMarketId,
+                        orderIds: [orderId],
+                      })
+                    }
+                    onCancelAll={() =>
+                      sendDeskCommand({ action: "cancel", sourceMarketId: market.sourceMarketId })
+                    }
+                    onPlace={(input) => placeGameOrder(market, input)}
+                    onReplace={(orderId, price, size) =>
+                      sendDeskCommand({
+                        action: "replace",
+                        sourceMarketId: market.sourceMarketId,
+                        orderId,
+                        price,
+                        size,
+                      })
+                    }
+                    onSwap={() => swapPairing(market.sourceMarketId)}
+                    runtime={runtimeMarkets[market.sourceMarketId]}
+                    tape={tape[market.sourceMarketId]}
+                  />
                 );
               })}
             </div>
