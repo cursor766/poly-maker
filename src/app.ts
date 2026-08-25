@@ -34,6 +34,7 @@ import type {
   SourceOddUpdate,
   TokenBook,
 } from "./types.js";
+import { queueInactiveDeskCommand, takeReadyDeskCommands } from "./web/desk-command-queue.js";
 import {
   consumeDeskCommands,
   DESK_COMMANDS_PATH,
@@ -86,8 +87,9 @@ export class MakerApp {
   private readonly allConditionIds: string[] = [];
   private readonly runtimeLimits: RuntimeLimits;
   private readonly configWatchers: FSWatcher[] = [];
-  private reloadTimer: NodeJS.Timeout | undefined;
+  private reloadTimers = new Map<string, NodeJS.Timeout>();
   private reloadSerial: Promise<void> = Promise.resolve();
+  private pendingDeskCommands: DeskCommand[] = [];
   private tradingClient: PolymarketTradingClient | undefined;
   private tradingSupervisor: TradingSupervisor | undefined;
   private timer: NodeJS.Timeout | undefined;
@@ -212,8 +214,8 @@ export class MakerApp {
   async stop(reason = "shutdown"): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
-    if (this.reloadTimer) clearTimeout(this.reloadTimer);
-    this.reloadTimer = undefined;
+    for (const timer of this.reloadTimers.values()) clearTimeout(timer);
+    this.reloadTimers.clear();
     for (const watcher of this.configWatchers) watcher.close();
     this.configWatchers.length = 0;
     await this.protectAll(reason);
@@ -325,6 +327,7 @@ export class MakerApp {
         if (!existing) {
           try {
             this.runtimes.push(await this.buildRuntime(mapping));
+            await this.flushPendingDeskCommands();
           } catch (error) {
             this.logger.error({ error, slug: mapping.polymarketSlug }, "hot-add market failed");
           }
@@ -358,6 +361,7 @@ export class MakerApp {
         configuredMarkets: next.length,
         activeMarkets: this.runtimes.length,
       });
+      await this.flushPendingDeskCommands();
     });
     return this.reloadSerial;
   }
@@ -387,12 +391,15 @@ export class MakerApp {
       const targetName = basename(item.path);
       const watcher = watch(dirname(item.path), (_event, filename) => {
         if (filename && filename.toString() !== targetName) return;
-        if (this.reloadTimer) clearTimeout(this.reloadTimer);
-        this.reloadTimer = setTimeout(() => {
+        const pending = this.reloadTimers.get(item.path);
+        if (pending) clearTimeout(pending);
+        const timer = setTimeout(() => {
+          this.reloadTimers.delete(item.path);
           void item.reload().catch((error) => {
             this.logger.error({ error, path: item.path }, "hot reload failed");
           });
         }, 300);
+        this.reloadTimers.set(item.path, timer);
       });
       this.configWatchers.push(watcher);
     }
@@ -544,6 +551,7 @@ export class MakerApp {
     }
     this.evaluating = true;
     try {
+      await this.flushPendingDeskCommands();
       await Promise.all(this.runtimes.map((runtime) => this.evaluate(runtime)));
     } finally {
       this.evaluating = false;
@@ -561,6 +569,11 @@ export class MakerApp {
       this.logger.warn({ error: message, slug: runtime.market.slug }, "order book fetch failed");
       this.rejectDetails.set(runtime.mapping.sourceMarketId, message);
       await this.protectRuntime(runtime, "polymarket-book-error", false);
+      return;
+    }
+
+    if (runtime.manualQuotes && runtime.manualQuotes.length > 0) {
+      await this.maintainManualQuotes(runtime, runtime.manualQuotes, books);
       return;
     }
 
@@ -599,13 +612,6 @@ export class MakerApp {
     }
 
     try {
-      if (runtime.manualQuotes && runtime.manualQuotes.length > 0) {
-        this.plannedQuotes.set(runtime.mapping.sourceMarketId, runtime.manualQuotes);
-        this.quoteNotes.set(runtime.mapping.sourceMarketId, "操作员手动挂单");
-        await runtime.executor.reconcile(runtime.market, runtime.manualQuotes, books);
-        this.rejectDetails.delete(runtime.mapping.sourceMarketId);
-        return;
-      }
       const fairByOutcome = mapFairProbabilities(runtime.mapping, runtime.market, fair);
       const complementParameters = {
         targetReturnRate:
@@ -722,11 +728,93 @@ export class MakerApp {
     });
   }
 
+  private activeRuntimeIds(): Set<string> {
+    return new Set(this.runtimes.map((runtime) => runtime.mapping.sourceMarketId));
+  }
+
+  private async flushPendingDeskCommands(): Promise<void> {
+    const pendingBefore = this.pendingDeskCommands.length;
+    const ready = takeReadyDeskCommands(this.pendingDeskCommands, this.activeRuntimeIds());
+    const expired = pendingBefore - ready.length - this.pendingDeskCommands.length;
+    if (expired > 0) {
+      this.logger.warn({ expired }, "desk command expired before the market was hot-added");
+    }
+    for (const command of ready) {
+      await this.applyDeskCommand(command);
+    }
+  }
+
+  private async maintainManualQuotes(
+    runtime: MarketRuntime,
+    quotes: Quote[],
+    books: ReadonlyMap<string, TokenBook>,
+  ): Promise<void> {
+    if (runtime.market.closed || !runtime.market.acceptingOrders) {
+      await this.protectRuntime(runtime, "polymarket-closed", false);
+      return;
+    }
+    this.releaseOperatorLock(runtime);
+    this.plannedQuotes.set(runtime.mapping.sourceMarketId, quotes);
+    this.quoteNotes.set(runtime.mapping.sourceMarketId, "操作员手动挂单");
+    try {
+      await runtime.executor.reconcile(runtime.market, quotes, books);
+      this.rejectDetails.delete(runtime.mapping.sourceMarketId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        { error: message, slug: runtime.market.slug },
+        "manual quote reconcile failed",
+      );
+      this.rejectDetails.set(runtime.mapping.sourceMarketId, message);
+    }
+  }
+
+  private async syncManualQuotes(runtime: MarketRuntime, quotes: Quote[]): Promise<void> {
+    runtime.operatorPaused = false;
+    runtime.manualQuotes = quotes;
+    this.plannedQuotes.set(runtime.mapping.sourceMarketId, quotes);
+    this.quoteNotes.set(runtime.mapping.sourceMarketId, "操作员手动挂单");
+    if (this.lockReasons.get(runtime.mapping.sourceMarketId) === "operator-paused") {
+      this.lockReasons.delete(runtime.mapping.sourceMarketId);
+    }
+    if (runtime.market.closed || !runtime.market.acceptingOrders) {
+      this.logger.warn({ slug: runtime.market.slug }, "desk quotes stored; polymarket closed");
+      return;
+    }
+    if (this.orderBooks) {
+      try {
+        runtime.lastBooks = await this.orderBooks.fetchBooks(runtime.market);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.warn(
+          { error: message, slug: runtime.market.slug },
+          "desk quote book fetch failed",
+        );
+        return;
+      }
+    }
+    if (!runtime.lastBooks) return;
+    this.releaseOperatorLock(runtime);
+    await runtime.executor.reconcile(runtime.market, quotes, runtime.lastBooks);
+  }
+
+  private releaseOperatorLock(runtime: MarketRuntime): void {
+    if (!runtime.executor.locked) return;
+    runtime.executor.unlock();
+    runtime.requiresSourceReopen = false;
+    this.lockReasons.delete(runtime.mapping.sourceMarketId);
+    this.tui?.recordExecutionState(runtime.mapping.round ?? 0, false);
+  }
+
   private async applyDeskCommand(command: DeskCommand): Promise<void> {
     const runtime = this.runtimes.find(
       (item) => item.mapping.sourceMarketId === command.sourceMarketId,
     );
     if (!runtime) {
+      if (queueInactiveDeskCommand(command, this.activeRuntimeIds(), this.pendingDeskCommands)) {
+        this.logger.info({ command }, "desk command queued until the market is hot-added");
+        return;
+      }
       this.logger.warn({ command }, "desk command ignored; market not active");
       return;
     }
@@ -777,21 +865,7 @@ export class MakerApp {
         this.logger.warn({ command }, "desk place ignored; no matching outcomes");
         return;
       }
-      runtime.operatorPaused = false;
-      runtime.manualQuotes = quotes;
-      this.plannedQuotes.set(command.sourceMarketId, quotes);
-      this.quoteNotes.set(command.sourceMarketId, "操作员手动挂单");
-      if (this.lockReasons.get(command.sourceMarketId) === "operator-paused") {
-        this.lockReasons.delete(command.sourceMarketId);
-      }
-      const fair = this.latestFair.get(command.sourceMarketId);
-      if (fair && runtime.lastBooks && this.canUnlock(runtime, fair, runtime.lastBooks)) {
-        runtime.executor.unlock();
-        runtime.requiresSourceReopen = false;
-      }
-      if (!runtime.executor.locked && runtime.lastBooks) {
-        await runtime.executor.reconcile(runtime.market, quotes, runtime.lastBooks);
-      }
+      await this.syncManualQuotes(runtime, quotes);
       await this.audit.write("operator_place", {
         sourceMarketId: command.sourceMarketId,
         commandId: command.id,
@@ -821,11 +895,7 @@ export class MakerApp {
               }
             : quote,
       );
-      runtime.manualQuotes = nextQuotes;
-      this.plannedQuotes.set(command.sourceMarketId, nextQuotes);
-      if (!runtime.executor.locked && runtime.lastBooks) {
-        await runtime.executor.reconcile(runtime.market, nextQuotes, runtime.lastBooks);
-      }
+      await this.syncManualQuotes(runtime, nextQuotes);
       await this.audit.write("operator_replace", {
         sourceMarketId: command.sourceMarketId,
         commandId: command.id,

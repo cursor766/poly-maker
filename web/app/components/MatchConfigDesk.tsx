@@ -61,6 +61,21 @@ function expandBuyQuotes(
   return quotes;
 }
 
+async function waitForRuntimeMarket(sourceMarketId: string, timeoutMs = 15_000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const status = await api<ControlStatus>("/api/status");
+    if (!status.process.running) {
+      throw new Error("交易核心已停止。请先启动，然后再点一键挂单。");
+    }
+    if (status.runtime?.markets.some((market) => market.sourceMarketId === sourceMarketId)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+  throw new Error("核心还没加载这个小局。请确认已保存并启动，稍后再点一键挂单。");
+}
+
 function isGameMarket(market: MarketPreview["markets"][number]): boolean {
   const kind = marketKind(market);
   return kind === "child_moneyline" || kind === "map_handicap" || kind === "totals";
@@ -346,11 +361,16 @@ export function MatchConfigDesk({
         setError("已启用该小局。请先保存并启动核心，然后再点一键挂单。");
         return;
       }
-      await sendDeskCommand({
-        action: "place",
-        sourceMarketId: market.sourceMarketId,
-        quotes,
+      await waitForRuntimeMarket(market.sourceMarketId);
+      await api("/api/desk/command", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "place",
+          sourceMarketId: market.sourceMarketId,
+          quotes,
+        }),
       });
+      await refreshMeta();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
