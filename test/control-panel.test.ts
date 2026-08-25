@@ -12,6 +12,7 @@ import { readRuntimeLimits, writeRuntimeLimits } from "../src/web/runtime-overri
 import { SseHub } from "../src/web/sse.js";
 import { parseMarketUrls } from "../src/web/url-parser.js";
 import { estimateMarketBudget } from "../web/lib/budget.js";
+import { complementAskTotal, sourceImpliedSum } from "../web/lib/complement-prices.js";
 
 test("parses source match ID and Polymarket event slug", () => {
   const parsed = parseMarketUrls(
@@ -34,6 +35,12 @@ test("rejects a source URL without a numeric match ID", () => {
 test("calculates complementary recommended BUY prices on tick", () => {
   const prices = previewInternals.recommendedPrices([0.6, 0.4], 0.8, 0.01);
   assert.deepEqual(prices, [0.5, 0.25]);
+});
+
+test("source implied sum stays above 100¢ while 5% rake asks are 105¢", () => {
+  const implied = sourceImpliedSum(1.85, 2.05);
+  assert.ok(implied && implied > 1);
+  assert.equal(Number(complementAskTotal(0.95)?.toFixed(4)), 1.0526);
 });
 
 test("suggests Polymarket outcomes by team aliases instead of array order", () => {

@@ -104,6 +104,9 @@ export function complementTargetBuyPrices(
 ): readonly [number, number] | undefined {
   const total = firstFair + secondFair;
   if (!Number.isFinite(total) || total <= 0 || targetReturnRate <= 0) return undefined;
+  // De-vig first, then apply rake on the ASK side (sum 1/rate > 1). Complementary
+  // BUYs are 1 - oppositeAsk, so they sum to 2 - 1/rate < 1. That is the rake,
+  // not a reversed haircut: paying 95¢ to buy both sides locks ~5¢ if both fill.
   const askTotal = 1 / targetReturnRate;
   const firstAsk = (firstFair / total) * askTotal;
   const secondAsk = (secondFair / total) * askTotal;

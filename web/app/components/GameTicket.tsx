@@ -10,7 +10,11 @@ import type {
   RuntimeMarket,
   TradingMode,
 } from "@/lib/api";
-import { complementBuyPricesOnTick } from "@/lib/complement-prices";
+import {
+  complementAskTotal,
+  complementBuyPricesOnTick,
+  sourceImpliedSum,
+} from "@/lib/complement-prices";
 
 function cents(value: number): string {
   return `${(value * 100).toFixed(value * 100 >= 10 ? 0 : 1)}¢`;
@@ -97,6 +101,12 @@ export function GameTicket({
   const suggested = recommended ?? (bestBid !== null ? bestBid + market.tickSize : bestAsk);
   const combinedAuto =
     autoPrices[0] !== null && autoPrices[1] !== null ? autoPrices[0] + autoPrices[1] : null;
+  const sourceSum = sourceImpliedSum(
+    market.outcomes[0]?.decimalOdd ?? 0,
+    market.outcomes[1]?.decimalOdd ?? 0,
+  );
+  const askTotal = complementAskTotal(autoReturnRate);
+  const rakePct = (1 - autoReturnRate) * 100;
   const price =
     priceCents === ""
       ? (suggested ?? 0)
@@ -252,8 +262,14 @@ export function GameTicket({
         <section className="bg-panel px-4 py-4">
           {autoFollow ? (
             <p className="mt-0 mb-3 rounded-lg border border-gold/20 bg-gold/10 px-3 py-2 text-[12px] leading-relaxed text-ink">
-              双边自动买价合计 {combinedAuto ? cents(combinedAuto) : "—"}，目标{" "}
-              {(autoReturnRate * 100).toFixed(0)}%。源赔率变动超过当前挂价后自动改价。
+              源隐含合计 {sourceSum ? cents(sourceSum) : "—"}
+              {sourceSum && sourceSum > 1 ? "（源站自己的抽水，大于 100¢）" : ""}。去水后抽{" "}
+              {rakePct.toFixed(0)}%：等价卖价合计 {askTotal ? cents(askTotal) : "—"}，所以互补
+              <b>买单</b>合计 {combinedAuto ? cents(combinedAuto) : "—"}
+              {combinedAuto
+                ? `。两边都成交会花 ${cents(combinedAuto)} 拿回 $1，锁利约 ${cents(1 - combinedAuto)}`
+                : ""}
+              。把买价加到超过 100¢ 才是抽反。
               {runtime?.reason ? ` 当前：${runtime.reason}` : ""}
             </p>
           ) : null}
@@ -261,7 +277,7 @@ export function GameTicket({
             <strong className="text-[13px]">
               {autoActive ? "自动双边" : `Buy ${outcome?.sourceName}`}
             </strong>
-            <span className="text-[11px] text-mute">{autoActive ? "跟源赔率" : "Limit"}</span>
+            <span className="text-[11px] text-mute">{autoActive ? "去水后抽水买" : "Limit"}</span>
           </div>
           {autoActive ? (
             <div className="grid gap-2">

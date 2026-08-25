@@ -26,6 +26,17 @@ test("95% target return makes both BUY prices sum to about 95 cents", () => {
   assert.ok(buyB > 0.44 && buyB < 0.45);
 });
 
+test("5% rake lifts asks above 100¢ and drops complementary buys below 100¢", () => {
+  const prices = complementTargetBuyPrices(0.53, 0.47, 0.95);
+  assert.ok(prices);
+  const [buyA, buyB] = prices;
+  const askA = 1 - buyB;
+  const askB = 1 - buyA;
+  assert.ok(askA + askB > 1);
+  assert.ok(buyA + buyB < 1);
+  assert.ok(Math.abs(askA + askB - 1 / 0.95) < 1e-12);
+});
+
 test("converts 80% return-rate asks into complementary BUY-only quotes", () => {
   const books = new Map<string, TokenBook>([
     [

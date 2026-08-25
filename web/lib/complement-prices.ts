@@ -1,3 +1,14 @@
+export function sourceImpliedSum(firstOdd: number, secondOdd: number): number | null {
+  if (!(firstOdd > 1) || !(secondOdd > 1)) return null;
+  const total = 1 / firstOdd + 1 / secondOdd;
+  return Number.isFinite(total) && total > 0 ? total : null;
+}
+
+export function complementAskTotal(targetReturnRate: number): number | null {
+  if (!(targetReturnRate > 0)) return null;
+  return 1 / targetReturnRate;
+}
+
 export function complementBuyPricesOnTick(
   firstFair: number,
   secondFair: number,
