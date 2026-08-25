@@ -48,7 +48,9 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
   const [error, setError] = useState("");
 
   const activeLeague = leagues.find((league) => league.id === leagueId) ?? leagues[0];
-  const candidates = result?.matched ?? [];
+  const matched = result?.matched ?? [];
+  const review = result?.review ?? [];
+  const candidates = useMemo(() => [...matched, ...review], [matched, review]);
   const selectedCandidates = useMemo(
     () => candidates.filter((candidate) => selected.has(candidate.sourceMatchId)),
     [candidates, selected],
@@ -113,8 +115,11 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
 
   async function saveBatch() {
     if (selectedCandidates.length === 0 || !limits) return;
+    const reviewCount = selectedCandidates.filter((candidate) => candidate.reason).length;
     const confirmed = window.confirm(
-      `将配置 ${selectedCandidates.length} 场 ${activeLeague?.shortName ?? "联赛"} 全场胜负，每边一层、每层 $${orderNotional.toFixed(2)}。确认继续？`,
+      `将配置 ${selectedCandidates.length} 场 ${activeLeague?.shortName ?? "联赛"} 全场胜负，每边一层、每层 $${orderNotional.toFixed(2)}${
+        reviewCount > 0 ? `。其中 ${reviewCount} 场未通过自动安全检查，需你自行确认。` : "。"
+      }确认继续？`,
     );
     if (!confirmed) return;
     setBusy(true);
@@ -256,9 +261,10 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
             {candidates.map((candidate) => {
               const reverse = swapped.has(candidate.sourceMatchId);
               const checked = selected.has(candidate.sourceMatchId);
+              const needsReview = Boolean(candidate.reason);
               return (
                 <article
-                  className={`matchTicket ${checked ? "selected" : ""}`}
+                  className={`matchTicket ${checked ? "selected" : ""} ${needsReview ? "review" : ""}`}
                   key={candidate.sourceMatchId}
                 >
                   <header className="matchTicketTop">
@@ -304,6 +310,7 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
                       );
                     })}
                   </div>
+                  {candidate.reason && <p className="matchReason">{candidate.reason}</p>}
                   {candidate.notes && candidate.notes.length > 0 && (
                     <ul className="matchNotes">
                       {candidate.notes.map((note) => (
@@ -324,14 +331,9 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
             })}
           </div>
 
-          {(result.review.length > 0 || result.rejected.length > 0) && (
+          {result.rejected.length > 0 && (
             <details className="leagueIssues">
-              <summary>未自动启用 {result.review.length + result.rejected.length} 场</summary>
-              {result.review.map((candidate) => (
-                <p key={`review-${candidate.sourceMatchId}`}>
-                  {candidate.teams.join(" vs ")}：{candidate.reason}
-                </p>
-              ))}
+              <summary>无法匹配 {result.rejected.length} 场</summary>
               {result.rejected.map((item) => (
                 <p key={`rejected-${item.sourceMatchId}`}>
                   {item.teams.join(" vs ")}：{item.reason}
