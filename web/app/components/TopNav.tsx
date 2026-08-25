@@ -26,13 +26,14 @@ export function TopNav() {
       </Link>
       <nav className="flex h-14 items-stretch gap-1">
         {links.map((link) => {
-          const active = pathname === link.href;
+          const active =
+            link.href === "/"
+              ? pathname === "/" || pathname.startsWith("/matches/")
+              : pathname === link.href;
           return (
             <Link
               className={`grid place-items-center border-b-2 px-3.5 text-[13px] font-medium ${
-                active
-                  ? "border-gold text-ink"
-                  : "border-transparent text-mute hover:text-ink"
+                active ? "border-gold text-ink" : "border-transparent text-mute hover:text-ink"
               }`}
               href={link.href}
               key={link.href}
