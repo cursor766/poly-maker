@@ -259,21 +259,6 @@ export class LiveExecutor implements QuoteExecutor {
   }
 
   private async validateQuotes(quotes: readonly Quote[]): Promise<Quote[]> {
-    let plannedNotional = 0;
-    const valid: Quote[] = [];
-    for (const quote of quotes) {
-      if (quote.side !== "BUY")
-        throw new Error("live executor accepts complementary BUY orders only");
-      if (!this.options.tokenIds.includes(quote.tokenId)) {
-        throw new Error(`token ${quote.tokenId} is outside executor market`);
-      }
-      const notional = quote.price * quote.size;
-      if (notional > this.options.maxOrderNotional + 1e-9) {
-        throw new Error(`order notional ${notional} exceeds per-order limit`);
-      }
-      plannedNotional += notional;
-      valid.push(quote);
-    }
     const accountOrders = await this.gateway.listOpenOrders();
     const otherOrderNotional = accountOrders
       .filter((order) => order.conditionId !== this.options.conditionId)
@@ -282,9 +267,29 @@ export class LiveExecutor implements QuoteExecutor {
       (sum, position) => sum + Math.max(0, position),
       0,
     );
-    const total = plannedNotional + otherOrderNotional + positionNotional;
-    if (total > this.options.maxAccountNotional + 1e-9) {
-      throw new Error(`account notional ${total} exceeds account limit`);
+    let remaining = this.options.maxAccountNotional - otherOrderNotional - positionNotional;
+    const valid: Quote[] = [];
+    for (const quote of quotes) {
+      if (quote.side !== "BUY")
+        throw new Error("live executor accepts complementary BUY orders only");
+      if (!this.options.tokenIds.includes(quote.tokenId)) {
+        throw new Error(`token ${quote.tokenId} is outside executor market`);
+      }
+      const notional = quote.price * quote.size;
+      if (notional > this.options.maxOrderNotional + 1e-9) continue;
+      if (notional > remaining + 1e-9) continue;
+      valid.push(quote);
+      remaining -= notional;
+    }
+    if (valid.length !== quotes.length) {
+      await this.audit.write("account_notional_trimmed", {
+        conditionId: this.options.conditionId,
+        limit: this.options.maxAccountNotional,
+        otherOrderNotional,
+        positionNotional,
+        planned: quotes.length,
+        kept: valid.length,
+      });
     }
     return valid;
   }

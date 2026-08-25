@@ -18,6 +18,22 @@ export interface ComplementMakerParameters {
   quoteLevels: number;
   levelSpacingTicks: number;
   sourceOverround?: number;
+  reservedAccountNotional?: number;
+}
+
+export function longShareExposure(positions: PositionState): number {
+  return [...positions.byToken.values()].reduce((sum, position) => sum + Math.max(0, position), 0);
+}
+
+export function availableAccountNotional(
+  maxAccountNotional: number,
+  positions: PositionState,
+  reservedAccountNotional = 0,
+): number {
+  return Math.max(
+    0,
+    maxAccountNotional - longShareExposure(positions) - Math.max(0, reservedAccountNotional),
+  );
 }
 
 export interface TopOfBookMakerParameters extends ComplementMakerParameters {
@@ -234,11 +250,11 @@ export function generateComplementBuyQuotes(
     parameters.sourceOverround ?? 1,
   );
   if (!rawBuyPrices) return [];
-  const existingExposure = [...positions.byToken.values()].reduce(
-    (sum, position) => sum + Math.max(0, position),
-    0,
+  let availableNotional = availableAccountNotional(
+    parameters.maxAccountNotional,
+    positions,
+    parameters.reservedAccountNotional,
   );
-  let availableNotional = Math.max(0, parameters.maxAccountNotional - existingExposure);
   const quotes: Quote[] = [];
 
   market.outcomes.forEach((outcome, index) => {
@@ -306,11 +322,11 @@ export function generateTopOfBookBuyQuotes(
   ] as const;
   if (targetAsks.some((price) => price <= 0 || price >= 1)) return [];
   const complementCaps = [1 - targetAsks[1], 1 - targetAsks[0]] as const;
-  const existingExposure = [...positions.byToken.values()].reduce(
-    (sum, position) => sum + Math.max(0, position),
-    0,
+  let availableNotional = availableAccountNotional(
+    parameters.maxAccountNotional,
+    positions,
+    parameters.reservedAccountNotional,
   );
-  let availableNotional = Math.max(0, parameters.maxAccountNotional - existingExposure);
   const quotes: Quote[] = [];
 
   market.outcomes.forEach((outcome, index) => {

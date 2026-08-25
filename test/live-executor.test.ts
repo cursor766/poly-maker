@@ -152,6 +152,61 @@ test("live executor diffs remote orders and cancels only its condition", async (
   }
 });
 
+test("trims quotes to the remaining account limit instead of failing closed", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "poly-maker-budget-"));
+  try {
+    const gateway = new FakeGateway();
+    gateway.orders = [
+      {
+        id: "other-market",
+        conditionId: "other",
+        tokenId: "x",
+        side: "BUY",
+        price: 0.5,
+        size: 36,
+        matchedSize: 0,
+      },
+    ];
+    const executor = makeExecutor(gateway, new AuditLog(join(directory, "audit.ndjson")), "live");
+    executor.unlock();
+    const layeredQuotes: Quote[] = [
+      { tokenId: "a", outcome: "A", side: "BUY", price: 0.4, size: 5 },
+      { tokenId: "b", outcome: "B", side: "BUY", price: 0.4, size: 5 },
+    ];
+    await executor.reconcile(market, layeredQuotes, books);
+    assert.equal(gateway.placed.length, 1);
+    assert.equal(gateway.placed[0]?.tokenId, "a");
+    assert.equal(gateway.placed[0]?.price, 0.4);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("does not fail closed when the account is already at the notional cap", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "poly-maker-cap-"));
+  try {
+    const gateway = new FakeGateway();
+    gateway.orders = [
+      {
+        id: "other-market",
+        conditionId: "other",
+        tokenId: "x",
+        side: "BUY",
+        price: 0.5,
+        size: 50,
+        matchedSize: 0,
+      },
+    ];
+    const executor = makeExecutor(gateway, new AuditLog(join(directory, "audit.ndjson")), "live");
+    executor.unlock();
+    await executor.reconcile(market, [quote], books);
+    assert.equal(gateway.placed.length, 0);
+    assert.equal(gateway.canceledIds.length, 0);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("retains an existing quote when target moves by only one tick", async () => {
   const directory = await mkdtemp(join(tmpdir(), "poly-maker-reprice-"));
   try {

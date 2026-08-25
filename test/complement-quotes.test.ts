@@ -252,3 +252,30 @@ test("generates three five-dollar layers per outcome at two-tick spacing", () =>
   );
   for (const quote of quotes) assert.ok(quote.price * quote.size <= 5 + 1e-9);
 });
+
+test("reserves other markets' open notional instead of overshooting the account cap", () => {
+  const books = new Map<string, TokenBook>([
+    ["a", { tokenId: "a", bids: [], asks: [{ price: 0.9, size: 10 }], receivedAt: 1 }],
+    ["b", { tokenId: "b", bids: [], asks: [{ price: 0.9, size: 10 }], receivedAt: 1 }],
+  ]);
+  const quotes = generateComplementBuyQuotes(
+    market,
+    new Map([
+      ["A", 0.6],
+      ["B", 0.4],
+    ]),
+    books,
+    positions,
+    {
+      targetReturnRate: 0.8,
+      orderNotional: 5,
+      maxOutcomePosition: 50,
+      maxOrderNotional: 5,
+      maxAccountNotional: 20,
+      reservedAccountNotional: 20,
+      quoteLevels: 1,
+      levelSpacingTicks: 2,
+    },
+  );
+  assert.equal(quotes.length, 0);
+});

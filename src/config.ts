@@ -61,7 +61,7 @@ const envSchema = z
     MAX_OUTCOME_POSITION: z.coerce.number().positive().default(50),
     MAX_TOTAL_EXPOSURE: z.coerce.number().positive().default(75),
     MAX_ORDER_NOTIONAL: z.coerce.number().positive().default(5),
-    MAX_ACCOUNT_NOTIONAL: z.coerce.number().positive().default(25),
+    MAX_ACCOUNT_NOTIONAL: z.coerce.number().positive().default(100),
     REFRESH_MS: z.coerce.number().int().positive().default(500),
     LIVE_TRADING_ACK: z.string().optional(),
     LIVE_TRADING_ACK_2: z.string().optional(),

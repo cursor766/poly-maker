@@ -22,6 +22,7 @@ import {
   generateComplementBuyQuotes,
   generateMakerQuotes,
   generateTopOfBookBuyQuotes,
+  longShareExposure,
 } from "./strategy/maker.js";
 import { clobPrice, clobSize } from "./strategy/tick.js";
 import { OddsTui } from "./tui/odds-tui.js";
@@ -616,6 +617,7 @@ export class MakerApp {
 
     try {
       const fairByOutcome = mapFairProbabilities(runtime.mapping, runtime.market, fair);
+      const reservedAccountNotional = this.otherOpenNotional(runtime);
       const complementParameters = {
         targetReturnRate:
           runtime.mapping.targetReturnRate ?? this.runtimeLimits.makerTargetReturnRate,
@@ -623,6 +625,7 @@ export class MakerApp {
         maxOutcomePosition: this.runtimeLimits.maxOutcomePosition,
         maxOrderNotional: this.runtimeLimits.maxOrderNotional,
         maxAccountNotional: this.runtimeLimits.maxAccountNotional,
+        reservedAccountNotional,
         quoteLevels: runtime.mapping.quoteLevels ?? this.config.QUOTE_LEVELS,
         levelSpacingTicks:
           runtime.mapping.levelSpacingTicks ?? this.config.QUOTE_LEVEL_SPACING_TICKS,
@@ -687,7 +690,8 @@ export class MakerApp {
             : [];
         this.quoteNotes.set(
           runtime.mapping.sourceMarketId,
-          notes.join("；") || "策略未生成可挂价格",
+          this.accountBudgetNote(runtime, reservedAccountNotional) ??
+            (notes.join("；") || "策略未生成可挂价格"),
         );
       } else {
         this.quoteNotes.delete(runtime.mapping.sourceMarketId);
@@ -951,6 +955,22 @@ export class MakerApp {
       price: order.price,
       size: Math.max(order.size - order.matchedSize, 0),
     }));
+  }
+
+  private otherOpenNotional(runtime: MarketRuntime): number {
+    return this.runtimes
+      .filter((item) => item !== runtime)
+      .reduce((sum, item) => sum + item.executor.openOrderNotional, 0);
+  }
+
+  private accountBudgetNote(
+    runtime: MarketRuntime,
+    reservedAccountNotional: number,
+  ): string | null {
+    const used = reservedAccountNotional + longShareExposure(runtime.executor.positions);
+    const limit = this.runtimeLimits.maxAccountNotional;
+    if (used + 1e-9 < limit) return null;
+    return `账户额度已满（其他盘口占用 $${used.toFixed(2)} / 上限 $${limit.toFixed(2)}），本局本轮不挂`;
   }
 
   private async protectRuntime(
