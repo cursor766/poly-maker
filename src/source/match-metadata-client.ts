@@ -31,6 +31,7 @@ const matchMetadataSchema = z.object({
   id: z.coerce.string(),
   bo: z.coerce.number().int().positive(),
   score: z.string().default(""),
+  tournament_id: z.coerce.string().optional().default(""),
   tournament_cn_name: z.string().default(""),
   tournament_name: z.string().default(""),
   match_cn_team: z.string().default(""),
@@ -211,6 +212,7 @@ export interface ListedSourceMatch {
   startTime: number;
   status: number;
   sourceOpen: boolean;
+  tournamentId: string;
 }
 
 export function parseSourceMatchList(
@@ -238,6 +240,7 @@ export function parseSourceMatchList(
         status: raw.status,
         sourceOpen:
           raw.suspended === 0 && raw.visible !== 0 && raw.is_open_match !== 0 && raw.end_time === 0,
+        tournamentId: raw.tournament_id,
       },
     ];
   });

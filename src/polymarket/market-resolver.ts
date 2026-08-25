@@ -36,6 +36,37 @@ export interface ListedMoneylineEvent {
   markets: ListedMoneylineMarket[];
 }
 
+export interface MoneylineEventQuery {
+  tagSlug: string;
+  titlePattern?: RegExp;
+  searchFallbackQuery?: string;
+  pageSize?: number;
+}
+
+function toListedEvent(
+  event: Pick<z.infer<typeof gammaEventSchema>, "slug" | "title" | "startTime" | "markets">,
+): ListedMoneylineEvent | undefined {
+  const markets = event.markets
+    .filter(
+      (market) =>
+        market.sportsMarketType === "moneyline" || market.sportsMarketType === "child_moneyline",
+    )
+    .map((market) => ({
+      ...toResolvedMarket(market),
+      round: inferRound(event.slug, market.slug),
+      tradable: market.active && !market.closed && market.acceptingOrders && market.enableOrderBook,
+    }))
+    .sort((left, right) => left.round - right.round);
+  if (!markets.some((market) => market.round === 0)) return undefined;
+  const parsedStart = event.startTime ? Date.parse(event.startTime) : Number.NaN;
+  return {
+    slug: event.slug,
+    title: event.title,
+    startTime: Number.isFinite(parsedStart) ? parsedStart : null,
+    markets,
+  };
+}
+
 function parseStringPair(value: string, field: string): [string, string] {
   const parsed = z.array(z.string()).length(2).parse(JSON.parse(value));
   const first = parsed[0];
@@ -95,48 +126,42 @@ export class MarketResolver {
   }
 
   async listActiveMoneylineEvents(
-    tagSlug: string,
-    pageSize = 100,
+    query: MoneylineEventQuery | string,
+    pageSize?: number,
   ): Promise<ListedMoneylineEvent[]> {
+    const resolved: MoneylineEventQuery =
+      typeof query === "string"
+        ? { tagSlug: query, ...(pageSize === undefined ? {} : { pageSize }) }
+        : query;
+    const limit = resolved.pageSize ?? pageSize ?? 100;
     const collected: z.infer<typeof gammaEventSchema>[] = [];
-    for (let offset = 0; ; offset += pageSize) {
+    for (let offset = 0; ; offset += limit) {
       const url = new URL(`${this.gammaApiUrl}/events`);
-      url.searchParams.set("tag_slug", tagSlug);
+      url.searchParams.set("tag_slug", resolved.tagSlug);
       url.searchParams.set("active", "true");
       url.searchParams.set("closed", "false");
-      url.searchParams.set("limit", String(pageSize));
+      url.searchParams.set("limit", String(limit));
       url.searchParams.set("offset", String(offset));
       const response = await this.fetchWithRetry(url);
       const page = z.array(gammaEventSchema).parse(await response.json());
       collected.push(...page);
-      if (page.length < pageSize) break;
+      if (page.length < limit) break;
     }
-    if (collected.length === 0) return this.searchActiveMoneylineEvents("KPL Growth League");
-    return collected.flatMap((event) => {
-      const markets = event.markets
-        .filter(
-          (market) =>
-            market.sportsMarketType === "moneyline" ||
-            market.sportsMarketType === "child_moneyline",
-        )
-        .map((market) => ({
-          ...toResolvedMarket(market),
-          round: inferRound(event.slug, market.slug),
-          tradable:
-            market.active && !market.closed && market.acceptingOrders && market.enableOrderBook,
-        }))
-        .sort((left, right) => left.round - right.round);
-      if (!markets.some((market) => market.round === 0)) return [];
-      const parsedStart = event.startTime ? Date.parse(event.startTime) : Number.NaN;
-      return [
-        {
-          slug: event.slug,
-          title: event.title,
-          startTime: Number.isFinite(parsedStart) ? parsedStart : null,
-          markets,
-        },
-      ];
+    const tagged = collected.filter((event) =>
+      resolved.titlePattern ? resolved.titlePattern.test(event.title) : true,
+    );
+    const mapped = tagged.flatMap((event) => {
+      const listed = toListedEvent(event);
+      return listed ? [listed] : [];
     });
+    if (mapped.length > 0) return mapped;
+    if (resolved.searchFallbackQuery) {
+      return this.searchActiveMoneylineEvents(resolved.searchFallbackQuery, resolved.titlePattern);
+    }
+    if (typeof query === "string" && collected.length === 0) {
+      return this.searchActiveMoneylineEvents("KPL Growth League");
+    }
+    return [];
   }
 
   async resolveMoneyline(eventSlug: string, marketSlug = eventSlug): Promise<ResolvedMarket> {
@@ -162,7 +187,10 @@ export class MarketResolver {
     throw new Error(`Gamma API returned HTTP ${lastStatus}`);
   }
 
-  private async searchActiveMoneylineEvents(query: string): Promise<ListedMoneylineEvent[]> {
+  private async searchActiveMoneylineEvents(
+    query: string,
+    titlePattern = /KPL Growth League/i,
+  ): Promise<ListedMoneylineEvent[]> {
     const client = createPublicClient();
     const events: ListedMoneylineEvent[] = [];
     let pages = 0;
@@ -172,7 +200,7 @@ export class MarketResolver {
         if (
           !event.title ||
           !event.slug ||
-          !/KPL Growth League/i.test(event.title) ||
+          !titlePattern.test(event.title) ||
           !event.state.active ||
           event.state.closed ||
           event.state.ended

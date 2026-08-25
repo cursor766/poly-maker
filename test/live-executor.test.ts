@@ -146,6 +146,7 @@ test("live executor diffs remote orders and cancels only its condition", async (
     assert.deepEqual(gateway.canceledMarkets, []);
     assert.ok(gateway.orders.some((order) => order.id === "order-1"));
     assert.ok(gateway.orders.some((order) => order.id === "other-market"));
+    assert.ok(executor.listRestingOrders().some((order) => order.tokenId === "a"));
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

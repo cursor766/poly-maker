@@ -163,7 +163,7 @@ const marketMappingSchema = z
     polymarketEventSlug: z.string().min(1).optional(),
     polymarketSlug: z.string().min(1),
     outcomes: z.array(outcomeMappingSchema),
-    round: z.number().int().min(0).max(5).optional(),
+    round: z.number().int().min(0).max(7).optional(),
     quoteMode: z.enum(["two-sided", "complement-buy", "top-of-book"]).optional(),
     orderNotional: z.number().positive().optional(),
     quoteLevels: z.number().int().positive().max(10).optional(),

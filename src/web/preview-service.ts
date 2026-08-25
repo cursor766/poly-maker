@@ -87,6 +87,15 @@ export function teamMatchScore(sourceName: string, polymarketOutcome: string): n
     [/ttg|talent|广州/, /talent|ttg/],
     [/lgd|nbw|杭州/, /lgd|nbw/],
     [/rw|济南|rogue/, /rogue|warriors|rw/],
+    [/edg|edward|上海/, /edward|edg/],
+    [/wolves|狼队|wol|重庆/, /wolves/],
+    [/hero|久竞|jiujing|南通/, /hero|jiujing/],
+    [/jdg|北京/, /\bjd\b|jdg/],
+    [/estar/, /estar/],
+    [/超玩会|\bag\b/, /\bag\b|super play/],
+    [/weibo|\bwbg\b/, /weibo|\bwbg\b/],
+    [/\brng\b/, /\brng\b/],
+    [/\bdrg\b/, /\bdrg\b/],
   ];
   for (const [sourcePattern, outcomePattern] of aliases) {
     if (sourcePattern.test(joinedSource) && outcomePattern.test(joinedOutcome)) score += 5;

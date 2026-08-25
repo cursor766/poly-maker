@@ -8,7 +8,7 @@ const configuredMarketSchema = z.object({
   enabled: z.boolean(),
   sourceMarketId: z.string().min(1),
   polymarketSlug: z.string().min(1),
-  round: z.number().int().min(0).max(5),
+  round: z.number().int().min(0).max(7),
   outcomes: z
     .array(
       z.object({

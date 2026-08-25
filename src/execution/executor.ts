@@ -1,4 +1,4 @@
-import type { PositionState, Quote, ResolvedMarket, TokenBook } from "../types.js";
+import type { PositionState, Quote, ResolvedMarket, RestingOrder, TokenBook } from "../types.js";
 
 export interface QuoteExecutor {
   readonly positions: PositionState;
@@ -12,6 +12,8 @@ export interface QuoteExecutor {
     books: ReadonlyMap<string, TokenBook>,
   ): Promise<void>;
   cancelAll(reason: string): Promise<void>;
+  cancelOrders(orderIds: readonly string[], reason: string): Promise<void>;
+  listRestingOrders(): RestingOrder[];
   lock(reason: string): Promise<void>;
   unlock(): void;
   syncAccount(): Promise<void>;
