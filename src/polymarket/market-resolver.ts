@@ -14,6 +14,8 @@ const gammaMarketSchema = z.object({
   active: z.boolean(),
   enableOrderBook: z.boolean(),
   sportsMarketType: z.string().optional(),
+  groupItemTitle: z.string().optional(),
+  question: z.string().optional(),
   feesEnabled: z.boolean().optional().default(false),
 });
 
@@ -24,9 +26,14 @@ const gammaEventSchema = z.object({
   markets: z.array(gammaMarketSchema),
 });
 
+export type QuoteableMarketKind = "moneyline" | "child_moneyline" | "map_handicap" | "totals";
+
 export interface ListedMoneylineMarket extends ResolvedMarket {
   round: number;
   tradable: boolean;
+  kind: QuoteableMarketKind;
+  line: number | null;
+  groupItemTitle: string;
 }
 
 export interface ListedMoneylineEvent {
@@ -43,28 +50,36 @@ export interface MoneylineEventQuery {
   pageSize?: number;
 }
 
-function toListedEvent(
-  event: Pick<z.infer<typeof gammaEventSchema>, "slug" | "title" | "startTime" | "markets">,
-): ListedMoneylineEvent | undefined {
-  const markets = event.markets
-    .filter(
-      (market) =>
-        market.sportsMarketType === "moneyline" || market.sportsMarketType === "child_moneyline",
-    )
-    .map((market) => ({
-      ...toResolvedMarket(market),
-      round: inferRound(event.slug, market.slug),
-      tradable: market.active && !market.closed && market.acceptingOrders && market.enableOrderBook,
-    }))
-    .sort((left, right) => left.round - right.round);
-  if (!markets.some((market) => market.round === 0)) return undefined;
-  const parsedStart = event.startTime ? Date.parse(event.startTime) : Number.NaN;
-  return {
-    slug: event.slug,
-    title: event.title,
-    startTime: Number.isFinite(parsedStart) ? parsedStart : null,
-    markets,
-  };
+const QUOTEABLE_TYPES = new Set<QuoteableMarketKind>([
+  "moneyline",
+  "child_moneyline",
+  "map_handicap",
+  "totals",
+]);
+
+export function parsePointLine(slug: string): number | null {
+  const match = /(\d+)pt(\d+)/i.exec(slug);
+  if (!match?.[1] || !match[2]) return null;
+  return Number(match[1]) + Number(match[2]) / 10 ** match[2].length;
+}
+
+export function marketKind(type: string | null | undefined): QuoteableMarketKind | undefined {
+  if (
+    type === "moneyline" ||
+    type === "child_moneyline" ||
+    type === "map_handicap" ||
+    type === "totals"
+  ) {
+    return type;
+  }
+  return undefined;
+}
+
+export function isMatchWinnerMarket(market: {
+  kind?: QuoteableMarketKind;
+  round: number;
+}): boolean {
+  return market.kind ? market.kind === "moneyline" : market.round === 0;
 }
 
 function parseStringPair(value: string, field: string): [string, string] {
@@ -95,6 +110,41 @@ function toResolvedMarket(market: z.infer<typeof gammaMarketSchema>): ResolvedMa
   };
 }
 
+function toListedMarket(
+  eventSlug: string,
+  market: z.infer<typeof gammaMarketSchema>,
+): ListedMoneylineMarket | undefined {
+  const kind = marketKind(market.sportsMarketType);
+  if (!kind) return undefined;
+  return {
+    ...toResolvedMarket(market),
+    round: inferRound(eventSlug, market.slug),
+    tradable: market.active && !market.closed && market.acceptingOrders && market.enableOrderBook,
+    kind,
+    line: parsePointLine(market.slug),
+    groupItemTitle: market.groupItemTitle ?? "",
+  };
+}
+
+function toListedEvent(
+  event: Pick<z.infer<typeof gammaEventSchema>, "slug" | "title" | "startTime" | "markets">,
+): ListedMoneylineEvent | undefined {
+  const markets = event.markets
+    .flatMap((market) => {
+      const listed = toListedMarket(event.slug, market);
+      return listed ? [listed] : [];
+    })
+    .sort((left, right) => left.round - right.round || left.slug.localeCompare(right.slug));
+  if (!markets.some((market) => isMatchWinnerMarket(market))) return undefined;
+  const parsedStart = event.startTime ? Date.parse(event.startTime) : Number.NaN;
+  return {
+    slug: event.slug,
+    title: event.title,
+    startTime: Number.isFinite(parsedStart) ? parsedStart : null,
+    markets,
+  };
+}
+
 export class MarketResolver {
   constructor(
     private readonly gammaApiUrl: string,
@@ -112,17 +162,11 @@ export class MarketResolver {
     if (!event) throw new Error(`Polymarket event not found: ${eventSlug}`);
 
     return event.markets
-      .filter(
-        (market) =>
-          market.sportsMarketType === "moneyline" || market.sportsMarketType === "child_moneyline",
-      )
-      .map((market) => ({
-        ...toResolvedMarket(market),
-        round: inferRound(eventSlug, market.slug),
-        tradable:
-          market.active && !market.closed && market.acceptingOrders && market.enableOrderBook,
-      }))
-      .sort((left, right) => left.round - right.round);
+      .flatMap((market) => {
+        const listed = toListedMarket(eventSlug, market);
+        return listed ? [listed] : [];
+      })
+      .sort((left, right) => left.round - right.round || left.slug.localeCompare(right.slug));
   }
 
   async listActiveMoneylineEvents(
@@ -210,11 +254,12 @@ export class MarketResolver {
         const eventSlug = event.slug;
         const markets = event.markets.flatMap((market) => {
           const sportsMarketType = market.sports?.sportsMarketType;
+          const kind = marketKind(sportsMarketType);
           if (
             !market.slug ||
             !market.conditionId ||
-            !sportsMarketType ||
-            !["moneyline", "child_moneyline"].includes(sportsMarketType) ||
+            !kind ||
+            !QUOTEABLE_TYPES.has(kind) ||
             !market.trading.minimumTickSize ||
             !market.trading.minimumOrderSize
           ) {
@@ -241,10 +286,13 @@ export class MarketResolver {
                 !market.state.closed &&
                 market.state.acceptingOrders === true &&
                 market.state.enableOrderBook === true,
+              kind,
+              line: parsePointLine(market.slug),
+              groupItemTitle: "",
             },
           ];
         });
-        if (!markets.some((market) => market.round === 0)) continue;
+        if (!markets.some((market) => isMatchWinnerMarket(market))) continue;
         const parsedStart = event.schedule.startTime
           ? Date.parse(event.schedule.startTime)
           : Number.NaN;
@@ -252,7 +300,9 @@ export class MarketResolver {
           slug: eventSlug,
           title: event.title,
           startTime: Number.isFinite(parsedStart) ? parsedStart : null,
-          markets: markets.sort((left, right) => left.round - right.round),
+          markets: markets.sort(
+            (left, right) => left.round - right.round || left.slug.localeCompare(right.slug),
+          ),
         });
       }
       if (!page.hasMore || pages >= 5) break;

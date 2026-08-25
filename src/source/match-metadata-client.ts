@@ -97,6 +97,16 @@ function normalizeMarketName(market: z.infer<typeof marketMetadataSchema>): stri
   if (enName.toLowerCase() === "map winner" || cnName === "单局 - 获胜") {
     return `第${market.round}局胜负`;
   }
+  if (/map handicap/i.test(enName) || cnName === "地图让分" || cnName.includes("地图让分")) {
+    return "地图让分";
+  }
+  if (
+    /map totals|total maps/i.test(enName) ||
+    cnName === "地图总数大小" ||
+    cnName.startsWith("地图总数")
+  ) {
+    return "地图总数大小";
+  }
   return cnName || enName || genericMarketName(market.round);
 }
 

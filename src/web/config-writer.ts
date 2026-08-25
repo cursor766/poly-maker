@@ -116,7 +116,6 @@ export async function writeBatchMarketConfigs(
       ...match,
       markets: match.markets.map((market) => ({
         ...market,
-        round: 0,
         quoteLevels: 1,
         quoteMode: "top-of-book" as const,
       })),

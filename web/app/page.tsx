@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { LeagueAutoMaker } from "@/app/components/LeagueAutoMaker";
-import { Button, Field, errorClass, inputClass, panelClass } from "@/app/components/ui";
+import { Button, errorClass, Field, inputClass, panelClass } from "@/app/components/ui";
 import {
   api,
   type MarketMapping,
@@ -21,6 +21,7 @@ interface MarketForm {
   quoteLevels: number;
   levelSpacingTicks: number;
   targetReturnRate: number;
+  quoteMode: "complement-buy" | "top-of-book";
 }
 
 const sampleSource = "https://example.com/markets/4689100176946822";
@@ -31,9 +32,23 @@ function roundLabel(round: number): string {
   return round === 0 ? "全场" : `G${round}`;
 }
 
+function marketKind(
+  market: MarketPreview["markets"][number],
+): NonNullable<MarketPreview["markets"][number]["kind"]> {
+  return market.kind ?? (market.round === 0 ? "moneyline" : "child_moneyline");
+}
+
+function marketBadge(market: MarketPreview["markets"][number]): string {
+  const kind = marketKind(market);
+  if (kind === "map_handicap") return market.line != null ? `+${market.line}` : "让分";
+  if (kind === "totals") return market.line != null ? `O/U ${market.line}` : "总数";
+  return roundLabel(market.round);
+}
+
 function buildForms(
   preview: MarketPreview,
   saved: readonly MarketMapping[],
+  defaultTargetReturnRate: number,
 ): Record<string, MarketForm> {
   const bySource = new Map(saved.map((mapping) => [mapping.sourceMarketId, mapping]));
   return Object.fromEntries(
@@ -48,6 +63,7 @@ function buildForms(
             market.outcomes[0].suggestedPolymarketOutcome,
             market.outcomes[1].suggestedPolymarketOutcome,
           ] as [string, string]);
+      const quoteMode = existing?.quoteMode === "complement-buy" ? "complement-buy" : "top-of-book";
       return [
         market.sourceMarketId,
         {
@@ -56,7 +72,8 @@ function buildForms(
           orderNotional: existing?.orderNotional ?? 5,
           quoteLevels: existing?.quoteLevels ?? 2,
           levelSpacingTicks: existing?.levelSpacingTicks ?? 2,
-          targetReturnRate: existing?.targetReturnRate ?? 0.8,
+          targetReturnRate: existing?.targetReturnRate ?? defaultTargetReturnRate,
+          quoteMode,
         },
       ];
     }),
@@ -112,7 +129,7 @@ export default function ConfigurePage() {
       setSourceUrl(nextSource);
       setPolymarketUrl(nextPolymarket);
       setPreview(result);
-      setForms(buildForms(result, related));
+      setForms(buildForms(result, related, limits?.makerTargetReturnRate ?? 0.8));
       setManualOpen(true);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -165,15 +182,35 @@ export default function ConfigurePage() {
     }));
   }
 
-  function setOnlyRound(round: number) {
+  function setEnabledWhere(predicate: (market: MarketPreview["markets"][number]) => boolean) {
     setForms((current) =>
       Object.fromEntries(
         Object.entries(current).map(([marketId, form]) => {
           const market = preview?.markets.find((item) => item.sourceMarketId === marketId);
-          return [marketId, { ...form, enabled: market?.round === round && !!market.tradable }];
+          return [marketId, { ...form, enabled: !!market && market.tradable && predicate(market) }];
         }),
       ),
     );
+  }
+
+  function enableWhere(predicate: (market: MarketPreview["markets"][number]) => boolean) {
+    setForms((current) =>
+      Object.fromEntries(
+        Object.entries(current).map(([marketId, form]) => {
+          const market = preview?.markets.find((item) => item.sourceMarketId === marketId);
+          if (!market?.tradable || !predicate(market)) return [marketId, form];
+          return [marketId, { ...form, enabled: true }];
+        }),
+      ),
+    );
+  }
+
+  function setOnlyRound(round: number) {
+    setEnabledWhere((market) => {
+      const kind = marketKind(market);
+      if (round === 0) return kind === "moneyline";
+      return kind === "child_moneyline" && market.round === round;
+    });
   }
 
   function swapPairing(marketId: string) {
@@ -218,6 +255,7 @@ export default function ConfigurePage() {
               quoteLevels: form.quoteLevels,
               levelSpacingTicks: form.levelSpacingTicks,
               targetReturnRate: form.targetReturnRate,
+              quoteMode: form.quoteMode,
             };
           }),
         }),
@@ -289,10 +327,18 @@ export default function ConfigurePage() {
                   </small>
                 </div>
                 <div className="flex gap-2">
-                  <Button disabled={loading} onClick={() => void openSaved(match)} variant="secondary">
+                  <Button
+                    disabled={loading}
+                    onClick={() => void openSaved(match)}
+                    variant="secondary"
+                  >
                     继续配置
                   </Button>
-                  <Button disabled={loading} onClick={() => void deleteSaved(match)} variant="danger">
+                  <Button
+                    disabled={loading}
+                    onClick={() => void deleteSaved(match)}
+                    variant="danger"
+                  >
                     删除
                   </Button>
                 </div>
@@ -308,16 +354,18 @@ export default function ConfigurePage() {
         onToggle={(event) => setManualOpen(event.currentTarget.open)}
       >
         <summary className="cursor-pointer list-none px-5 py-4 [&::-webkit-details-marker]:hidden">
-          <h2 className="m-0 text-lg font-medium">
-            {preview ? "当前比赛链接" : "手动粘贴链接"}
-          </h2>
-          <p className="mt-1.5 text-sm text-mute">源站比赛页 + Polymarket 事件页。预览只读，不会下单。</p>
+          <h2 className="m-0 text-lg font-medium">{preview ? "当前比赛链接" : "手动粘贴链接"}</h2>
+          <p className="mt-1.5 text-sm text-mute">
+            源站比赛页 + Polymarket 事件页。预览只读，不会下单。
+          </p>
         </summary>
         <section className="border-t border-line px-5 py-5">
           <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
             <div>
               <h2 className="m-0 text-lg font-medium">{preview ? "当前比赛链接" : "载入新比赛"}</h2>
-              <p className="mt-1.5 text-sm text-mute">只读取比赛和盘口信息，不会在预览阶段创建订单。</p>
+              <p className="mt-1.5 text-sm text-mute">
+                只读取比赛和盘口信息，不会在预览阶段创建订单。
+              </p>
             </div>
             {preview && (
               <Button disabled={loading} onClick={() => void loadPreview()} variant="secondary">
@@ -344,7 +392,10 @@ export default function ConfigurePage() {
                 placeholder={samplePolymarket}
               />
             </Field>
-            <Button disabled={loading || !sourceUrl || !polymarketUrl} onClick={() => void loadPreview()}>
+            <Button
+              disabled={loading || !sourceUrl || !polymarketUrl}
+              onClick={() => void loadPreview()}
+            >
               {loading ? "读取中…" : preview ? "重新预览" : "预览市场"}
             </Button>
           </div>
@@ -356,21 +407,29 @@ export default function ConfigurePage() {
         <>
           <div className="mb-4 grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
             <div className="rounded-xl border border-line bg-inset px-4 py-3.5">
-              <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">对阵</span>
+              <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">
+                对阵
+              </span>
               <strong className="mt-1.5 block text-[15px]">{preview.teams.join(" / ")}</strong>
             </div>
             <div className="rounded-xl border border-line bg-inset px-4 py-3.5">
-              <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">赛事</span>
+              <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">
+                赛事
+              </span>
               <strong className="mt-1.5 block text-[15px]">{preview.tournament || "—"}</strong>
             </div>
             <div className="rounded-xl border border-line bg-inset px-4 py-3.5">
-              <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">赛制 / 比分</span>
+              <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">
+                赛制 / 比分
+              </span>
               <strong className="mt-1.5 block text-[15px]">
                 BO{preview.bestOf} · {preview.score}
               </strong>
             </div>
             <div className="rounded-xl border border-line bg-inset px-4 py-3.5">
-              <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">已启用</span>
+              <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">
+                已启用
+              </span>
               <strong className="mt-1.5 block text-[15px]">
                 {Object.values(forms).filter((form) => form.enabled).length}/
                 {preview.markets.length}
@@ -383,28 +442,82 @@ export default function ConfigurePage() {
               <div>
                 <h2 className="m-0 text-lg font-medium">盘口与挂单参数</h2>
                 <p className="mt-1.5 text-sm leading-relaxed text-mute">
-                  默认全部关闭；勾选你要做的局。第一局结束后再回来只勾第二局即可。
+                  默认全部关闭。BO7 可勾选 G1–G6 局胜者，以及 +3.5 地图让分 / 地图总数。目标回报 80%
+                  通常挂不进 KPL 买一，贴近盘口请用约 95%。
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
-                {preview.markets.map((market) => (
+                {[
+                  ...new Set(
+                    preview.markets
+                      .filter((market) => {
+                        const kind = marketKind(market);
+                        return kind === "moneyline" || kind === "child_moneyline";
+                      })
+                      .map((market) => market.round),
+                  ),
+                ]
+                  .sort((left, right) => left - right)
+                  .map((round) => (
+                    <Button
+                      key={`only-${round}`}
+                      disabled={loading}
+                      onClick={() => setOnlyRound(round)}
+                      variant="secondary"
+                    >
+                      只开{roundLabel(round)}
+                    </Button>
+                  ))}
+                {preview.markets.some((market) => marketKind(market) === "child_moneyline") && (
                   <Button
-                    key={`only-${market.sourceMarketId}`}
-                    disabled={loading || !market.tradable}
-                    onClick={() => setOnlyRound(market.round)}
+                    disabled={loading}
+                    onClick={() =>
+                      enableWhere((market) => marketKind(market) === "child_moneyline")
+                    }
                     variant="secondary"
                   >
-                    只开{roundLabel(market.round)}
+                    全开局胜者
                   </Button>
-                ))}
+                )}
+                {preview.markets.some(
+                  (market) => marketKind(market) === "map_handicap" && market.line === 3.5,
+                ) && (
+                  <Button
+                    disabled={loading}
+                    onClick={() =>
+                      enableWhere(
+                        (market) => marketKind(market) === "map_handicap" && market.line === 3.5,
+                      )
+                    }
+                    variant="secondary"
+                  >
+                    开启+3.5
+                  </Button>
+                )}
+                {preview.markets.some((market) => marketKind(market) === "map_handicap") && (
+                  <Button
+                    disabled={loading}
+                    onClick={() => enableWhere((market) => marketKind(market) === "map_handicap")}
+                    variant="secondary"
+                  >
+                    开启地图让分
+                  </Button>
+                )}
+                {preview.markets.some((market) => marketKind(market) === "totals") && (
+                  <Button
+                    disabled={loading}
+                    onClick={() => enableWhere((market) => marketKind(market) === "totals")}
+                    variant="secondary"
+                  >
+                    开启地图总数
+                  </Button>
+                )}
               </div>
             </div>
             {limits && (
               <div
                 className={`mb-4 rounded-xl border px-4 py-3.5 ${
-                  budgetExceeded
-                    ? "border-rose/35 bg-rose/10"
-                    : "border-line bg-inset"
+                  budgetExceeded ? "border-rose/35 bg-rose/10" : "border-line bg-inset"
                 }`}
               >
                 <div className="flex items-center justify-between gap-3">
@@ -433,7 +546,7 @@ export default function ConfigurePage() {
             <div className="grid gap-3">
               {preview.markets.length === 0 && (
                 <div className="rounded-xl border border-dashed border-line px-4 py-8 text-center text-sm text-mute">
-                  未找到源站与 Polymarket 可对应的胜负盘口。
+                  未找到源站与 Polymarket 可对应的胜负 / 让分 / 总数盘口。
                 </div>
               )}
               {preview.markets.map((market) => {
@@ -447,7 +560,7 @@ export default function ConfigurePage() {
                     <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
                       <div className="flex items-start gap-3">
                         <span className="mt-0.5 rounded-md border border-gold/25 bg-gold/10 px-2 py-1 font-mono text-[11px] font-semibold text-gold">
-                          {roundLabel(market.round)}
+                          {marketBadge(market)}
                         </span>
                         <div>
                           <strong className="block">{market.name}</strong>
@@ -473,7 +586,7 @@ export default function ConfigurePage() {
                         </label>
                       </div>
                     </div>
-                    <div className="grid gap-2.5 md:grid-cols-2 xl:grid-cols-5">
+                    <div className="grid gap-2.5 md:grid-cols-2 xl:grid-cols-4">
                       {market.outcomes.map((outcome, index) => (
                         <div
                           className="rounded-[10px] border border-line bg-raised p-3"
@@ -553,6 +666,37 @@ export default function ConfigurePage() {
                           }
                         />
                       </Field>
+                      <Field htmlFor={`return-${market.sourceMarketId}`} label="目标回报 %">
+                        <input
+                          className={inputClass}
+                          id={`return-${market.sourceMarketId}`}
+                          type="number"
+                          min="50"
+                          max="99"
+                          step="1"
+                          value={Math.round(form.targetReturnRate * 100)}
+                          onChange={(event) =>
+                            updateForm(market.sourceMarketId, {
+                              targetReturnRate: Number(event.target.value) / 100,
+                            })
+                          }
+                        />
+                      </Field>
+                      <Field htmlFor={`mode-${market.sourceMarketId}`} label="报价模式">
+                        <select
+                          className={inputClass}
+                          id={`mode-${market.sourceMarketId}`}
+                          value={form.quoteMode}
+                          onChange={(event) =>
+                            updateForm(market.sourceMarketId, {
+                              quoteMode: event.target.value as MarketForm["quoteMode"],
+                            })
+                          }
+                        >
+                          <option value="top-of-book">买一排队</option>
+                          <option value="complement-buy">互补限价</option>
+                        </select>
+                      </Field>
                     </div>
                   </article>
                 );
@@ -569,7 +713,11 @@ export default function ConfigurePage() {
                 <option value="shadow">Shadow</option>
                 <option value="live">Live</option>
               </select>
-              <Button disabled={loading || budgetExceeded} onClick={() => void save("save")} variant="secondary">
+              <Button
+                disabled={loading || budgetExceeded}
+                onClick={() => void save("save")}
+                variant="secondary"
+              >
                 {makerRunning ? "保存并热更新" : "仅保存配置"}
               </Button>
               {!makerRunning && (

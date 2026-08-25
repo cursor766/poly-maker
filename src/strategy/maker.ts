@@ -51,6 +51,40 @@ export function calculateTopOfBookPrice(
     : null;
 }
 
+export function describeTopOfBookSkip(
+  fair: number,
+  oppositeFair: number,
+  book: TokenBook,
+  tickSize: number,
+  targetReturnRate: number,
+  minEdge: number,
+): string | null {
+  if (
+    calculateTopOfBookPrice(fair, oppositeFair, book, tickSize, targetReturnRate, minEdge) !== null
+  ) {
+    return null;
+  }
+  const bestBid = book.bids[0]?.price;
+  const bestAsk = book.asks[0]?.price;
+  if (bestBid === undefined || bestAsk === undefined) return "订单簿缺买一或卖一，无法排队";
+  const total = fair + oppositeFair;
+  if (!Number.isFinite(total) || total <= 0) return "源公平价无效";
+  const oppositeTargetAsk = (oppositeFair / total) * (1 / targetReturnRate);
+  const complementCap = 1 - oppositeTargetAsk;
+  const queueTarget = ceilToTick(bestBid + tickSize, tickSize);
+  const edgeCap = fair - minEdge;
+  const askCap = bestAsk - tickSize;
+  const rawCap = Math.min(complementCap, edgeCap, askCap);
+  const safeCap = floorToTick(rawCap, tickSize);
+  const binding =
+    edgeCap <= complementCap && edgeCap <= askCap
+      ? `公平价减边距 ${(edgeCap * 100).toFixed(1)}¢`
+      : complementCap <= askCap
+        ? `目标回报 ${(targetReturnRate * 100).toFixed(0)}% 上限 ${(complementCap * 100).toFixed(1)}¢`
+        : `卖一内一档 ${(askCap * 100).toFixed(1)}¢`;
+  return `买一+1tick ${(queueTarget * 100).toFixed(1)}¢ 超过安全上限 ${(safeCap * 100).toFixed(1)}¢（受限于${binding}）`;
+}
+
 function floorToTick(value: number, tick: number): number {
   return Math.floor((value + 1e-12) / tick) * tick;
 }

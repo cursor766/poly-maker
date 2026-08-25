@@ -18,6 +18,7 @@ import { RiskEngine } from "./risk/risk-engine.js";
 import { MatchMetadataClient } from "./source/match-metadata-client.js";
 import { MqttOddsFeed } from "./source/mqtt-client.js";
 import {
+  describeTopOfBookSkip,
   generateComplementBuyQuotes,
   generateMakerQuotes,
   generateTopOfBookBuyQuotes,
@@ -34,17 +35,17 @@ import type {
   TokenBook,
 } from "./types.js";
 import {
+  consumeDeskCommands,
+  DESK_COMMANDS_PATH,
+  type DeskCommand,
+  skipExistingDeskCommands,
+} from "./web/desk-commands.js";
+import {
   limitsFromConfig,
   type RuntimeLimits,
   readRuntimeLimits,
 } from "./web/runtime-overrides.js";
 import { type MakerRuntimeStatus, StatusReporter } from "./web/status-reporter.js";
-import {
-  consumeDeskCommands,
-  DESK_COMMANDS_PATH,
-  skipExistingDeskCommands,
-  type DeskCommand,
-} from "./web/desk-commands.js";
 
 interface MarketRuntime {
   mapping: MarketMapping;
@@ -76,6 +77,7 @@ export class MakerApp {
   private readonly plannedQuotes = new Map<string, Quote[]>();
   private readonly lockReasons = new Map<string, string>();
   private readonly rejectDetails = new Map<string, string>();
+  private readonly quoteNotes = new Map<string, string>();
   private readonly startedAt = Date.now();
   private readonly statusReporter: StatusReporter;
   private readonly sharedPositions: PositionState = { byToken: new Map(), cash: 0 };
@@ -312,6 +314,7 @@ export class MakerApp {
         this.plannedQuotes.delete(runtime.mapping.sourceMarketId);
         this.lockReasons.delete(runtime.mapping.sourceMarketId);
         this.rejectDetails.delete(runtime.mapping.sourceMarketId);
+        this.quoteNotes.delete(runtime.mapping.sourceMarketId);
       }
 
       for (const mapping of nextActive) {
@@ -640,6 +643,34 @@ export class MakerApp {
               );
       this.tui?.recordExecutionState(runtime.mapping.round ?? 0, false, undefined, quotes);
       this.plannedQuotes.set(runtime.mapping.sourceMarketId, quotes);
+      if (quotes.length === 0) {
+        const minEdge = this.config.MIN_EDGE + (runtime.market.feesEnabled ? 0.005 : 0);
+        const notes =
+          runtime.mapping.quoteMode === "top-of-book"
+            ? runtime.market.outcomes.flatMap((outcome, index) => {
+                const tokenId = runtime.market.tokenIds[index];
+                const fair = fairByOutcome.get(outcome);
+                const opposite = fairByOutcome.get(runtime.market.outcomes[1 - index] ?? "");
+                const book = tokenId ? books.get(tokenId) : undefined;
+                if (fair === undefined || opposite === undefined || !book) return [];
+                const note = describeTopOfBookSkip(
+                  fair,
+                  opposite,
+                  book,
+                  runtime.market.tickSize,
+                  runtime.mapping.targetReturnRate ?? this.runtimeLimits.makerTargetReturnRate,
+                  minEdge,
+                );
+                return note ? [`${outcome}：${note}`] : [];
+              })
+            : [];
+        this.quoteNotes.set(
+          runtime.mapping.sourceMarketId,
+          notes.join("；") || "策略未生成可挂价格",
+        );
+      } else {
+        this.quoteNotes.delete(runtime.mapping.sourceMarketId);
+      }
       await runtime.executor.reconcile(runtime.market, quotes, books);
       this.rejectDetails.delete(runtime.mapping.sourceMarketId);
     } catch (error) {
@@ -792,6 +823,7 @@ export class MakerApp {
           (sum, tokenId) => sum + Math.max(0, runtime.executor.positions.byToken.get(tokenId) ?? 0),
           0,
         );
+        const quoteNote = this.quoteNotes.get(runtime.mapping.sourceMarketId);
         return {
           name: runtime.mapping.name,
           round: runtime.mapping.round ?? 0,
@@ -804,6 +836,11 @@ export class MakerApp {
           operatorPaused: runtime.operatorPaused,
           ...(reason ? { reason } : {}),
           ...(rejectDetail ? { rejectDetail } : {}),
+          ...(quoteNote ? { quoteNote } : {}),
+          tickSize: runtime.market.tickSize,
+          targetReturnRate:
+            runtime.mapping.targetReturnRate ?? this.runtimeLimits.makerTargetReturnRate,
+          quoteMode: runtime.mapping.quoteMode ?? "complement-buy",
           sourceOpen: state ? state.open && state.visible && !state.suspended : null,
           sourceLocked: state ? state.suspended || !state.visible || !state.open : true,
           fairPrices: Object.fromEntries(
@@ -816,7 +853,8 @@ export class MakerApp {
           openOrders: runtime.executor.listRestingOrders().map((order) => ({
             ...order,
             outcome:
-              runtime.market.outcomes[runtime.market.tokenIds.indexOf(order.tokenId)] ?? order.tokenId,
+              runtime.market.outcomes[runtime.market.tokenIds.indexOf(order.tokenId)] ??
+              order.tokenId,
           })),
           books: Object.fromEntries(
             runtime.market.outcomes.map((outcome, index) => {

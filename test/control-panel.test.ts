@@ -177,6 +177,9 @@ test("preview only keeps pure winner markets for each round", () => {
       feesEnabled: false,
       round: 0,
       tradable: true,
+      kind: "moneyline" as const,
+      line: null,
+      groupItemTitle: "",
     },
     {
       slug: "event-game1",
@@ -190,12 +193,187 @@ test("preview only keeps pure winner markets for each round", () => {
       feesEnabled: false,
       round: 1,
       tradable: true,
+      kind: "child_moneyline" as const,
+      line: null,
+      groupItemTitle: "",
     },
   ];
   const markets = previewInternals.buildMarkets(match, polymarket, 0.8);
   assert.deepEqual(
     markets.map((item) => item.sourceMarketId),
     ["match-winner", "game1"],
+  );
+});
+
+test("preview pairs map handicap and totals by line instead of round", () => {
+  const match = {
+    matchId: "match",
+    teams: ["甲", "乙"] as const,
+    bestOf: 7,
+    score: "0:0",
+    tournament: "KPL",
+    markets: new Map([
+      [
+        "match-winner",
+        {
+          marketId: "match-winner",
+          matchId: "match",
+          scope: "match" as const,
+          round: 0,
+          name: "全场胜负",
+          outcomes: new Map([
+            ["odd-a", "甲"],
+            ["odd-b", "乙"],
+          ]),
+        },
+      ],
+      [
+        "handicap-35",
+        {
+          marketId: "handicap-35",
+          matchId: "match",
+          scope: "match" as const,
+          round: 0,
+          name: "地图让分",
+          outcomes: new Map([
+            ["odd-h1", "甲 -3.5"],
+            ["odd-h2", "乙 +3.5"],
+          ]),
+        },
+      ],
+      [
+        "totals-55",
+        {
+          marketId: "totals-55",
+          matchId: "match",
+          scope: "match" as const,
+          round: 0,
+          name: "地图总数大小",
+          outcomes: new Map([
+            ["odd-o", "大 5.5"],
+            ["odd-u", "小 5.5"],
+          ]),
+        },
+      ],
+    ]),
+    initialOdds: [
+      {
+        marketId: "match-winner",
+        matchId: "match",
+        oddId: "odd-a",
+        decimalOdd: 1.57,
+        returnRate: 95.5,
+        receivedAt: 1,
+      },
+      {
+        marketId: "match-winner",
+        matchId: "match",
+        oddId: "odd-b",
+        decimalOdd: 2.75,
+        returnRate: 95.5,
+        receivedAt: 1,
+      },
+      {
+        marketId: "handicap-35",
+        matchId: "match",
+        oddId: "odd-h1",
+        decimalOdd: 8.2,
+        returnRate: 94.5,
+        receivedAt: 1,
+      },
+      {
+        marketId: "handicap-35",
+        matchId: "match",
+        oddId: "odd-h2",
+        decimalOdd: 1.07,
+        returnRate: 94.5,
+        receivedAt: 1,
+      },
+      {
+        marketId: "totals-55",
+        matchId: "match",
+        oddId: "odd-o",
+        decimalOdd: 1.85,
+        returnRate: 94.5,
+        receivedAt: 1,
+      },
+      {
+        marketId: "totals-55",
+        matchId: "match",
+        oddId: "odd-u",
+        decimalOdd: 1.95,
+        returnRate: 94.5,
+        receivedAt: 1,
+      },
+    ],
+    initialStates: [],
+  };
+  const polymarket = [
+    {
+      slug: "event",
+      conditionId: "c0",
+      outcomes: ["A", "B"] as const,
+      tokenIds: ["t0", "t1"] as const,
+      tickSize: 0.01,
+      minOrderSize: 5,
+      acceptingOrders: true,
+      closed: false,
+      feesEnabled: true,
+      round: 0,
+      tradable: true,
+      kind: "moneyline" as const,
+      line: null,
+      groupItemTitle: "",
+    },
+    {
+      slug: "event-game-handicap-away-3pt5",
+      conditionId: "c-h",
+      outcomes: ["A -3.5", "B +3.5"] as const,
+      tokenIds: ["th0", "th1"] as const,
+      tickSize: 0.01,
+      minOrderSize: 5,
+      acceptingOrders: true,
+      closed: false,
+      feesEnabled: true,
+      round: 0,
+      tradable: true,
+      kind: "map_handicap" as const,
+      line: 3.5,
+      groupItemTitle: "B +3.5",
+    },
+    {
+      slug: "event-total-maps-5pt5",
+      conditionId: "c-t",
+      outcomes: ["Over", "Under"] as const,
+      tokenIds: ["tt0", "tt1"] as const,
+      tickSize: 0.01,
+      minOrderSize: 5,
+      acceptingOrders: true,
+      closed: false,
+      feesEnabled: true,
+      round: 0,
+      tradable: true,
+      kind: "totals" as const,
+      line: 5.5,
+      groupItemTitle: "5.5",
+    },
+  ];
+  const markets = previewInternals.buildMarkets(match, polymarket, 0.95);
+  assert.deepEqual(
+    markets.map((item) => [item.sourceMarketId, item.kind, item.line, item.polymarketSlug]),
+    [
+      ["match-winner", "moneyline", null, "event"],
+      ["handicap-35", "map_handicap", 3.5, "event-game-handicap-away-3pt5"],
+      ["totals-55", "totals", 5.5, "event-total-maps-5pt5"],
+    ],
+  );
+  assert.deepEqual(
+    markets[1]?.outcomes.map((item) => item.suggestedPolymarketOutcome),
+    ["A -3.5", "B +3.5"],
+  );
+  assert.deepEqual(
+    markets[2]?.outcomes.map((item) => item.suggestedPolymarketOutcome),
+    ["Over", "Under"],
   );
 });
 

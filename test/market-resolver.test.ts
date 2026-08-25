@@ -83,6 +83,34 @@ test("lists moneyline markets with inferred rounds", async () => {
               sportsMarketType: "spreads",
               feesEnabled: false,
             },
+            {
+              slug: "event-game-handicap-away-3pt5",
+              conditionId: "handicap",
+              outcomes: '["A","B"]',
+              clobTokenIds: '["ah","bh"]',
+              orderPriceMinTickSize: 0.01,
+              orderMinSize: 5,
+              acceptingOrders: true,
+              closed: false,
+              active: true,
+              enableOrderBook: true,
+              sportsMarketType: "map_handicap",
+              feesEnabled: false,
+            },
+            {
+              slug: "event-total-maps-5pt5",
+              conditionId: "totals",
+              outcomes: '["Over","Under"]',
+              clobTokenIds: '["to","tu"]',
+              orderPriceMinTickSize: 0.01,
+              orderMinSize: 5,
+              acceptingOrders: true,
+              closed: false,
+              active: true,
+              enableOrderBook: true,
+              sportsMarketType: "totals",
+              feesEnabled: false,
+            },
           ],
         },
       ]),
@@ -91,10 +119,16 @@ test("lists moneyline markets with inferred rounds", async () => {
   const markets = await new MarketResolver("https://example.test", fetcher).listMoneylineMarkets(
     "event",
   );
-  assert.equal(markets.length, 2);
-  assert.equal(markets[0]?.round, 0);
-  assert.equal(markets[1]?.round, 1);
-  assert.equal(markets[1]?.slug, "event-game1");
+  assert.equal(markets.length, 4);
+  assert.equal(markets[0]?.kind, "moneyline");
+  const game = markets.find((market) => market.kind === "child_moneyline");
+  assert.equal(game?.round, 1);
+  assert.equal(game?.slug, "event-game1");
+  const handicap = markets.find((market) => market.kind === "map_handicap");
+  assert.equal(handicap?.line, 3.5);
+  assert.equal(handicap?.round, 0);
+  const totals = markets.find((market) => market.kind === "totals");
+  assert.equal(totals?.line, 5.5);
 });
 
 test("rejects a closed market", async () => {

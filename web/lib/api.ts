@@ -12,6 +12,8 @@ export interface PreviewOutcome {
 export interface PreviewMarket {
   name: string;
   round: number;
+  kind?: "moneyline" | "child_moneyline" | "map_handicap" | "totals";
+  line?: number | null;
   sourceMarketId: string;
   polymarketSlug: string;
   polymarketOutcomes: [string, string];
@@ -60,6 +62,10 @@ export interface RuntimeMarket {
   operatorPaused: boolean;
   reason?: string;
   rejectDetail?: string;
+  quoteNote?: string;
+  tickSize?: number;
+  targetReturnRate?: number;
+  quoteMode?: "two-sided" | "complement-buy" | "top-of-book";
   sourceOpen: boolean | null;
   sourceLocked: boolean;
   fairPrices: Record<string, number>;
