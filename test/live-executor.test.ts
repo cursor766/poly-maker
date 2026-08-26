@@ -33,6 +33,7 @@ class FakeGateway implements TradingGateway {
   canceledIds: string[] = [];
   canceledMarkets: string[] = [];
   mutations: string[] = [];
+  globalListCalls = 0;
 
   async preflight(): Promise<TradingPreflight> {
     return {
@@ -46,6 +47,7 @@ class FakeGateway implements TradingGateway {
   }
 
   async listOpenOrders(conditionId?: string): Promise<ManagedOrder[]> {
+    if (conditionId === undefined) this.globalListCalls += 1;
     return this.orders.filter((order) => !conditionId || order.conditionId === conditionId);
   }
 
@@ -143,7 +145,7 @@ test("live executor diffs remote orders and cancels only its condition", async (
 
     assert.deepEqual(gateway.canceledIds, ["replace"]);
     assert.equal(gateway.placed.length, 1);
-    assert.deepEqual(gateway.mutations, ["place:a:0.4", "cancel:replace"]);
+    assert.deepEqual(gateway.mutations, ["cancel:replace", "place:a:0.4"]);
     assert.deepEqual(gateway.canceledMarkets, []);
     assert.ok(gateway.orders.some((order) => order.id === "order-1"));
     assert.ok(gateway.orders.some((order) => order.id === "other-market"));
@@ -233,6 +235,7 @@ test("places quotes when the account notional cap is disabled", async () => {
     await executor.reconcile(market, [quote], books);
     assert.equal(gateway.placed.length, 1);
     assert.equal(gateway.placed[0]?.tokenId, "a");
+    assert.equal(gateway.globalListCalls, 0);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

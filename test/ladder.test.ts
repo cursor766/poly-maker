@@ -127,7 +127,7 @@ test("adaptive complement quotes keep one level when other makers sit nearby", (
           { price: 0.52, size: 80 },
           { price: 0.51, size: 40 },
         ],
-        asks: [{ price: 0.92, size: 10 }],
+        asks: [{ price: 0.68, size: 10 }],
         receivedAt: 1,
       },
     ],
@@ -136,7 +136,7 @@ test("adaptive complement quotes keep one level when other makers sit nearby", (
       {
         tokenId: "b",
         bids: [{ price: 0.28, size: 80 }],
-        asks: [{ price: 0.92, size: 10 }],
+        asks: [{ price: 0.52, size: 10 }],
         receivedAt: 1,
       },
     ],

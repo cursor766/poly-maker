@@ -46,6 +46,7 @@ POLYMARKET_B_SIGNATURE_TYPE=3
 ORDER_NOTIONAL=5
 QUOTE_LEVELS=3
 QUOTE_LEVEL_SPACING_TICKS=2
+QUOTE_IMPROVE_TICKS=2
 MAX_ORDER_NOTIONAL=5
 MAX_ACCOUNT_NOTIONAL=0
 ```
@@ -145,8 +146,10 @@ PAPER、SHADOW 和 LIVE 的计划、撤单、heartbeat、成交/仓位同步写�
 
 LIVE 使用互补 BUY-only：目标 `SELL A @ qA` 会转换成 `BUY B @ 1-qA`，
 目标 `SELL B @ qB` 会转换成 `BUY A @ 1-qB`。订单始终 `postOnly`；若目标价
-会吃单，则退一 tick。锁盘后必须同时收到锁盘时间之后的双边源赔率、源盘口重新开放、
-Polymarket WS/订单簿新鲜数据以及健康 heartbeat，才会解除屏障。
+会吃单，则退一 tick。有买一时最多抬高 `QUOTE_IMPROVE_TICKS`（默认 2）档，不会跳到
+理论价中间；只有空簿才按理论安全价铺档。单边仓位会压低该边报价并加大对边对冲，
+Polymarket 中间价与源公平价严重冲突时会拉低或停止报价。锁盘后必须同时收到锁盘时间之后的
+双边源赔率、源盘口重新开放、Polymarket WS/订单簿新鲜数据以及健康 heartbeat，才会解除屏障。
 
 ## 概率处理
 
