@@ -1,3 +1,6 @@
+import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
+import { type ApiKey, toApiKey } from "@polymarket/bindings";
 import { AssetType } from "@polymarket/bindings/clob";
 import {
   createSecureClient,
@@ -10,8 +13,6 @@ import {
 import { fetchBalanceAllowance } from "@polymarket/client/actions";
 import { privateKey } from "@polymarket/client/viem";
 import { ClobClient, SignatureType } from "@polymarket/clob-client";
-import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
 import type { Logger } from "pino";
 import { createWalletClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -58,7 +59,7 @@ export interface TradingClientOptions {
 }
 
 export interface ClobApiCredentials {
-  key: string;
+  key: ApiKey;
   secret: string;
   passphrase: string;
 }
@@ -170,7 +171,7 @@ function parseCredentials(value: unknown): ClobApiCredentials | undefined {
     return undefined;
   }
   return {
-    key: candidate.key,
+    key: toApiKey(candidate.key),
     secret: candidate.secret,
     passphrase: candidate.passphrase,
   };
@@ -223,10 +224,12 @@ async function deriveCredentials(
   const signer = createWalletClient({ account, chain: polygon, transport: http() });
   const client = new ClobClient(clobUrl, chainId, signer, undefined, SignatureType.EOA, funder);
   try {
-    return await retry(() => client.deriveApiKey());
+    const credentials = await retry(() => client.deriveApiKey());
+    return { ...credentials, key: toApiKey(credentials.key) };
   } catch (error) {
     if (!isMissingDerivedKeyError(error)) throw error;
-    return retry(() => client.createApiKey());
+    const credentials = await retry(() => client.createApiKey());
+    return { ...credentials, key: toApiKey(credentials.key) };
   }
 }
 
@@ -282,7 +285,7 @@ export class PolymarketTradingClient implements TradingGateway {
     const cachedCredentials = await readCachedCredentials(credentialsPath, options.funder);
     const retry = <T>(operation: () => Promise<T>) =>
       retryClobAuth(operation, {
-        delaysMs: options.authRetryDelaysMs,
+        ...(options.authRetryDelaysMs ? { delaysMs: options.authRetryDelaysMs } : {}),
         onRetry: async (attempt, error, delayMs) => {
           const message = retryMessage(error);
           options.logger?.warn({ attempt, delayMs, message }, "CLOB auth timed out, retrying");

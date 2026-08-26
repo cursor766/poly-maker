@@ -3,6 +3,7 @@ import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { toApiKey } from "@polymarket/bindings";
 import type { SecureClient, SecureClientOptions } from "@polymarket/client";
 import { AuditLog } from "../src/logger.js";
 import {
@@ -15,7 +16,7 @@ import {
 const PRIVATE_KEY = `0x${"1".repeat(64)}`;
 const FUNDER = `0x${"2".repeat(40)}`;
 const CREDENTIALS = {
-  key: "cached-key",
+  key: toApiKey("cached-key"),
   secret: "cached-secret",
   passphrase: "cached-passphrase",
 };
@@ -148,7 +149,7 @@ test("create drops a rejected cache and retries without credentials", async () =
     await PolymarketTradingClient.create(options);
 
     const replacement = {
-      key: "replacement-key",
+      key: toApiKey("replacement-key"),
       secret: "replacement-secret",
       passphrase: "replacement-passphrase",
     };
