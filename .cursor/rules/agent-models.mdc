@@ -1,0 +1,19 @@
+---
+description: 所有交付最少由 gpt-5.6 完成；父代理必须派生，已派出的 gpt-5.6 直接做
+alwaysApply: true
+---
+
+开工前先用 Read 工具打开 `docs/agent-models.md`，并照做。不要让用户每次贴模型 slug。
+
+- 在独立功能分支上改（例如 `cursor/simple-frontend-page`），不要直接改主分支
+- 完成后说明：改了哪些文件、测试结果、以及实际使用的模型 slug
+
+硬规则：
+
+1. 用户提出的每一项要求，交付物最少由 `gpt-5.6-sol-high` 完成，包括改代码、修 bug、改文档或规则、开 PR、按计划实现、删 UI，以及合分支说明书里需要改仓库的部分。父代理（Grok 等）不得自己改仓库。
+2. 禁止「少绕一层」。改动小、更快、已经读过代码、当前会话也能写、只是文档、只改几行，都不是借口。只要当前会话不是 `gpt-5.6-sol-high`，就必须用 Task 派生子代理，`model` 填 `gpt-5.6-sol-high`，然后停手等它做完。
+3. 只有本轮 Task 已经派出的 `gpt-5.6-sol-high` 执行者可以直接做完；此时不要为同一轮任务再套一层自己。除此之外，父代理必须派生。
+4. 方案、计划、口径可先派 `claude-fable-5-thinking-high`，但落地内容仍须再派 `gpt-5.6-sol-high` 执行，不能只停在 fable。用户直接要求做时，只派 gpt-5.6。
+5. 消息若写了 `指定模型 slug: [...]`，且 slug 属于 gpt-5.6 家族（如 `gpt-5.6-sol-high` 或 `gpt-5.6-sol-xhigh`），使用该 slug；若指定非 gpt-5.6，仍先派 `gpt-5.6-sol-high`，不得用其它家族顶替。
+6. 用户没要求云端，就不要设置 `environment: cloud`。
+7. 收工汇报中的「实际使用的模型 slug」必须是实际跑完交付的 `gpt-5.6-sol-high` 或用户指定的 gpt-5.6 变体，不得填写父代理名称。
