@@ -1,8 +1,18 @@
 import { AssetType } from "@polymarket/bindings/clob";
-import { createSecureClient, OrderSide, type SecureClient, WalletType } from "@polymarket/client";
+import {
+  createSecureClient,
+  forkEnvironmentConfig,
+  OrderSide,
+  type SecureClient,
+  type SecureClientOptions,
+  WalletType,
+} from "@polymarket/client";
 import { fetchBalanceAllowance } from "@polymarket/client/actions";
 import { privateKey } from "@polymarket/client/viem";
 import { ClobClient, SignatureType } from "@polymarket/clob-client";
+import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
+import type { Logger } from "pino";
 import { createWalletClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { polygon } from "viem/chains";
@@ -39,6 +49,185 @@ export interface TradingClientOptions {
   clobUrl: string;
   audit: AuditLog;
   setupApprovals: boolean;
+  logger?: Pick<Logger, "warn">;
+  credentialsPath?: string;
+  createSecureClientFactory?: SecureClientFactory;
+  deriveCredentialsFactory?: DeriveCredentialsFactory;
+  authRetryDelaysMs?: readonly number[];
+  preflightFactory?: (client: PolymarketTradingClient) => Promise<void>;
+}
+
+export interface ClobApiCredentials {
+  key: string;
+  secret: string;
+  passphrase: string;
+}
+
+interface CachedClobApiCredentials extends ClobApiCredentials {
+  funder: string;
+}
+
+type SecureClientFactory = (options: SecureClientOptions) => Promise<SecureClient>;
+type DeriveCredentialsFactory = (
+  clobUrl: string,
+  chainId: number,
+  signerPrivateKey: string,
+  funder: string,
+  retry: <T>(operation: () => Promise<T>) => Promise<T>,
+) => Promise<ClobApiCredentials>;
+
+export interface AuthRetryOptions {
+  delaysMs?: readonly number[];
+  onRetry?: (attempt: number, error: unknown, delayMs: number) => void | Promise<void>;
+}
+
+const DEFAULT_AUTH_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000] as const;
+const DEFAULT_CREDENTIALS_PATH = "data/clob-api-creds.json";
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function errorNames(error: unknown): string {
+  if (typeof error !== "object" || error === null) return "";
+  const candidate = error as { name?: unknown; constructor?: { name?: unknown } };
+  return [candidate.name, candidate.constructor?.name]
+    .filter((name): name is string => typeof name === "string")
+    .join(" ");
+}
+
+export function isRetryableClobAuthError(error: unknown): boolean {
+  const names = errorNames(error);
+  if (/\b(?:TimeoutError|TransportError)\b/.test(names)) return true;
+  return /timed?\s*out|timeout|econnreset|econnrefused|etimedout|fetch failed|socket hang up|network/i.test(
+    `${names} ${errorMessage(error)}`,
+  );
+}
+
+function retryMessage(error: unknown): string {
+  const details = `${errorNames(error)} ${errorMessage(error)}`;
+  if (/timed?\s*out|timeout|etimedout/i.test(details)) return "request timed out";
+  if (/econnreset|socket hang up/i.test(details)) return "connection reset";
+  if (/econnrefused/i.test(details)) return "connection refused";
+  if (/fetch failed|network/i.test(details)) return "network transport error";
+  return "CLOB transport error";
+}
+
+export async function retryClobAuth<T>(
+  operation: () => Promise<T>,
+  options: AuthRetryOptions = {},
+): Promise<T> {
+  const delaysMs = options.delaysMs ?? DEFAULT_AUTH_RETRY_DELAYS_MS;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      const delayMs = delaysMs[attempt - 1];
+      if (!isRetryableClobAuthError(error) || delayMs === undefined) throw error;
+      await options.onRetry?.(attempt, error, delayMs);
+      if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
+function errorStatus(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const candidate = error as {
+    status?: unknown;
+    response?: { status?: unknown };
+    cause?: { status?: unknown; response?: { status?: unknown } };
+  };
+  const statuses = [
+    candidate.status,
+    candidate.response?.status,
+    candidate.cause?.status,
+    candidate.cause?.response?.status,
+  ];
+  return statuses.find((status): status is number => typeof status === "number");
+}
+
+function isInvalidCredentialsError(error: unknown): boolean {
+  return (
+    errorStatus(error) === 401 ||
+    /\b401\b|unauthori[sz]ed|invalid (?:api )?key|invalid credentials|credentials? (?:are )?invalid/i.test(
+      errorMessage(error),
+    )
+  );
+}
+
+function isMissingDerivedKeyError(error: unknown): boolean {
+  return errorStatus(error) === 400 || /\b400\b/.test(errorMessage(error));
+}
+
+function parseCredentials(value: unknown): ClobApiCredentials | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const candidate = value as Record<string, unknown>;
+  if (
+    typeof candidate.key !== "string" ||
+    typeof candidate.secret !== "string" ||
+    typeof candidate.passphrase !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    key: candidate.key,
+    secret: candidate.secret,
+    passphrase: candidate.passphrase,
+  };
+}
+
+async function readCachedCredentials(
+  path: string,
+  funder: string,
+): Promise<ClobApiCredentials | undefined> {
+  try {
+    const parsed = JSON.parse(await readFile(path, "utf8")) as unknown;
+    if (typeof parsed !== "object" || parsed === null) return undefined;
+    const cached = parsed as Partial<CachedClobApiCredentials>;
+    if (cached.funder?.toLowerCase() !== funder.toLowerCase()) return undefined;
+    return parseCredentials(cached);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || error instanceof SyntaxError) return undefined;
+    throw error;
+  }
+}
+
+async function writeCachedCredentials(
+  path: string,
+  funder: string,
+  credentials: ClobApiCredentials,
+): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  const temporaryPath = `${path}.${process.pid}.tmp`;
+  const contents = `${JSON.stringify({ funder, ...credentials })}\n`;
+  await writeFile(temporaryPath, contents, { encoding: "utf8", mode: 0o600 });
+  await rename(temporaryPath, path);
+  await chmod(path, 0o600);
+}
+
+async function deleteCachedCredentials(path: string): Promise<void> {
+  await unlink(path).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOENT") throw error;
+  });
+}
+
+async function deriveCredentials(
+  clobUrl: string,
+  chainId: number,
+  signerPrivateKey: string,
+  funder: string,
+  retry: <T>(operation: () => Promise<T>) => Promise<T>,
+): Promise<ClobApiCredentials> {
+  const account = privateKeyToAccount(signerPrivateKey as `0x${string}`);
+  const signer = createWalletClient({ account, chain: polygon, transport: http() });
+  const client = new ClobClient(clobUrl, chainId, signer, undefined, SignatureType.EOA, funder);
+  try {
+    return await retry(() => client.deriveApiKey());
+  } catch (error) {
+    if (!isMissingDerivedKeyError(error)) throw error;
+    return retry(() => client.createApiKey());
+  }
 }
 
 function parseBaseUnits(value: unknown): number {
@@ -89,10 +278,55 @@ export class PolymarketTradingClient implements TradingGateway {
     const signerPrivateKey = options.privateKey.startsWith("0x")
       ? options.privateKey
       : `0x${options.privateKey}`;
-    const client = await createSecureClient({
-      wallet: options.funder,
-      signer: privateKey(signerPrivateKey),
+    const credentialsPath = options.credentialsPath ?? DEFAULT_CREDENTIALS_PATH;
+    const cachedCredentials = await readCachedCredentials(credentialsPath, options.funder);
+    const retry = <T>(operation: () => Promise<T>) =>
+      retryClobAuth(operation, {
+        delaysMs: options.authRetryDelaysMs,
+        onRetry: async (attempt, error, delayMs) => {
+          const message = retryMessage(error);
+          options.logger?.warn({ attempt, delayMs, message }, "CLOB auth timed out, retrying");
+          await options.audit.write("trading_auth_retry", { attempt, delayMs, message });
+        },
+      });
+    const environment = forkEnvironmentConfig({
+      name: "poly-maker",
+      chainId: options.chainId,
+      clob: { rest: options.clobUrl },
     });
+    const signer = privateKey(signerPrivateKey);
+    const factory = options.createSecureClientFactory ?? createSecureClient;
+    const credentials =
+      cachedCredentials ??
+      (await (options.deriveCredentialsFactory ?? deriveCredentials)(
+        options.clobUrl,
+        options.chainId,
+        signerPrivateKey,
+        options.funder,
+        retry,
+      ));
+    let client: SecureClient;
+    try {
+      client = await retry(() =>
+        factory({
+          wallet: options.funder,
+          signer,
+          credentials,
+          environment,
+        }),
+      );
+    } catch (error) {
+      if (!cachedCredentials || !isInvalidCredentialsError(error)) throw error;
+      await deleteCachedCredentials(credentialsPath);
+      client = await retry(() =>
+        factory({
+          wallet: options.funder,
+          signer,
+          environment,
+        }),
+      );
+    }
+    await writeCachedCredentials(credentialsPath, options.funder, client.credentials);
     const trading = new PolymarketTradingClient(
       client,
       options.audit,
@@ -102,7 +336,7 @@ export class PolymarketTradingClient implements TradingGateway {
       options.funder,
       options.setupApprovals,
     );
-    await trading.preflight();
+    await (options.preflightFactory ?? ((client) => client.preflight()))(trading);
     return trading;
   }
 

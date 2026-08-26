@@ -160,6 +160,7 @@ export class MakerApp {
         clobUrl: this.config.CLOB_API_URL,
         audit: this.audit,
         setupApprovals: this.config.POLYMARKET_SETUP_APPROVALS,
+        logger: this.logger,
       });
     }
     for (const mapping of activeMappings) this.runtimes.push(await this.buildRuntime(mapping));
