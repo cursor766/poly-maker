@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { complementTargetBuyPrices, generateComplementBuyQuotes } from "../src/strategy/maker.js";
+import {
+  complementTargetBuyPrices,
+  generateComplementBuyQuotes,
+  queueCappedBuyPrice,
+  skewFairsForInventory,
+} from "../src/strategy/maker.js";
 import type { PositionState, ResolvedMarket, TokenBook } from "../src/types.js";
 
 const market: ResolvedMarket = {
@@ -65,7 +70,7 @@ test("converts 80% return-rate asks into complementary BUY-only quotes", () => {
       {
         tokenId: "b",
         bids: [{ price: 0.2, size: 10 }],
-        asks: [{ price: 0.9, size: 10 }],
+        asks: [{ price: 0.6, size: 10 }],
         receivedAt: 1,
       },
     ],
@@ -92,8 +97,8 @@ test("converts 80% return-rate asks into complementary BUY-only quotes", () => {
   assert.deepEqual(
     quotes.map(({ tokenId, side, price }) => ({ tokenId, side, price })),
     [
-      { tokenId: "a", side: "BUY", price: 0.52 },
-      { tokenId: "b", side: "BUY", price: 0.28 },
+      { tokenId: "a", side: "BUY", price: 0.32 },
+      { tokenId: "b", side: "BUY", price: 0.22 },
     ],
   );
   for (const quote of quotes) assert.ok(quote.price * quote.size <= 5 + 1e-9);
@@ -105,7 +110,7 @@ test("95% complementary quotes keep both sides under the source-fair pair", () =
       "a",
       {
         tokenId: "a",
-        bids: [{ price: 0.08, size: 10 }],
+        bids: [],
         asks: [{ price: 0.92, size: 10 }],
         receivedAt: 1,
       },
@@ -114,7 +119,7 @@ test("95% complementary quotes keep both sides under the source-fair pair", () =
       "b",
       {
         tokenId: "b",
-        bids: [{ price: 0.08, size: 10 }],
+        bids: [],
         asks: [{ price: 0.92, size: 10 }],
         receivedAt: 1,
       },
@@ -305,4 +310,94 @@ test("an unlimited account cap still quotes when other markets already have orde
     },
   );
   assert.equal(quotes.length, 2);
+});
+
+test("inventory skew lowers the long-side bid, lifts the hedge bid, and tilts size", () => {
+  const books = new Map<string, TokenBook>([
+    [
+      "a",
+      {
+        tokenId: "a",
+        bids: [{ price: 0.4, size: 10 }],
+        asks: [{ price: 0.8, size: 10 }],
+        receivedAt: 1,
+      },
+    ],
+    [
+      "b",
+      {
+        tokenId: "b",
+        bids: [{ price: 0.2, size: 10 }],
+        asks: [{ price: 0.6, size: 10 }],
+        receivedAt: 1,
+      },
+    ],
+  ]);
+  const fairs = new Map([
+    ["A", 0.6],
+    ["B", 0.4],
+  ]);
+  const parameters = {
+    targetReturnRate: 0.8,
+    orderNotional: 5,
+    maxOutcomePosition: 200,
+    maxOrderNotional: 10,
+    maxAccountNotional: 0,
+    quoteLevels: 1,
+    levelSpacingTicks: 1,
+  };
+  const flat = generateComplementBuyQuotes(market, fairs, books, positions, parameters);
+  const longA = generateComplementBuyQuotes(
+    market,
+    fairs,
+    books,
+    { byToken: new Map([["a", 80]]), cash: 100 },
+    { ...parameters, inventorySkew: 0.002 },
+  );
+
+  const skewed = skewFairsForInventory(
+    fairs,
+    market,
+    { byToken: new Map([["a", 80]]), cash: 100 },
+    0.002,
+  );
+  assert.ok(Math.abs((skewed.get("A") ?? 0) - 0.44) < 1e-12);
+  assert.ok(Math.abs((skewed.get("B") ?? 0) - 0.56) < 1e-12);
+  assert.ok((longA.find((quote) => quote.tokenId === "a")?.price ?? 1) < (flat[0]?.price ?? 0));
+  assert.ok(
+    (longA.find((quote) => quote.tokenId === "b")?.price ?? 0) >
+      (flat.find((quote) => quote.tokenId === "b")?.price ?? 1),
+  );
+  const longSide = longA.find((quote) => quote.tokenId === "a");
+  const hedgeSide = longA.find((quote) => quote.tokenId === "b");
+  assert.ok(longSide && hedgeSide);
+  assert.ok(longSide.size <= hedgeSide.size);
+});
+
+test("Polymarket mid disagreement pulls or halts queue-capped bids", () => {
+  const pulled = queueCappedBuyPrice(
+    0.52,
+    0.6,
+    {
+      tokenId: "a",
+      bids: [{ price: 0.51, size: 10 }],
+      asks: [{ price: 0.89, size: 10 }],
+      receivedAt: 1,
+    },
+    0.01,
+  );
+  const halted = queueCappedBuyPrice(
+    0.52,
+    0.6,
+    {
+      tokenId: "a",
+      bids: [{ price: 0.1, size: 10 }],
+      asks: [{ price: 0.4, size: 10 }],
+      receivedAt: 1,
+    },
+    0.01,
+  );
+
+  assert.equal(pulled, 0.5);
+  assert.equal(halted, null);
 });

@@ -24,6 +24,7 @@ import {
   generateMakerQuotes,
   generateTopOfBookBuyQuotes,
   longShareExposure,
+  skewFairsForInventory,
 } from "./strategy/maker.js";
 import { clobPrice, clobSize } from "./strategy/tick.js";
 import { OddsTui } from "./tui/odds-tui.js";
@@ -623,6 +624,12 @@ export class MakerApp {
     try {
       this.noteFills(runtime);
       const fairByOutcome = mapFairProbabilities(runtime.mapping, runtime.market, fair);
+      const inventorySkewedFairs = skewFairsForInventory(
+        fairByOutcome,
+        runtime.market,
+        runtime.executor.positions,
+        this.config.INVENTORY_SKEW,
+      );
       const reservedAccountNotional = this.otherOpenNotional(runtime);
       const kind = inferMappedMarketKind(runtime.mapping);
       const complementParameters = {
@@ -645,6 +652,8 @@ export class MakerApp {
         lastFillAtByToken: runtime.lastFillAtByToken,
         ownBidsByToken: this.ownBidsByToken(runtime),
         baitPositionRatio: this.runtimeLimits.baitPositionRatio,
+        inventorySkew: this.config.INVENTORY_SKEW,
+        maxImproveTicks: this.config.QUOTE_IMPROVE_TICKS,
         quoteLevels: runtime.mapping.quoteLevels ?? this.config.QUOTE_LEVELS,
         levelSpacingTicks:
           runtime.mapping.levelSpacingTicks ?? this.config.QUOTE_LEVEL_SPACING_TICKS,
@@ -654,7 +663,7 @@ export class MakerApp {
         runtime.mapping.quoteMode === "top-of-book"
           ? generateTopOfBookBuyQuotes(
               runtime.market,
-              fairByOutcome,
+              inventorySkewedFairs,
               books,
               runtime.executor.positions,
               {
@@ -691,8 +700,8 @@ export class MakerApp {
           runtime.mapping.quoteMode === "top-of-book"
             ? runtime.market.outcomes.flatMap((outcome, index) => {
                 const tokenId = runtime.market.tokenIds[index];
-                const outcomeFair = fairByOutcome.get(outcome);
-                const opposite = fairByOutcome.get(runtime.market.outcomes[1 - index] ?? "");
+                const outcomeFair = inventorySkewedFairs.get(outcome);
+                const opposite = inventorySkewedFairs.get(runtime.market.outcomes[1 - index] ?? "");
                 const book = tokenId ? books.get(tokenId) : undefined;
                 if (outcomeFair === undefined || opposite === undefined || !book) return [];
                 const note = describeTopOfBookSkip(

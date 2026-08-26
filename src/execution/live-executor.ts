@@ -166,11 +166,12 @@ export class LiveExecutor implements QuoteExecutor {
             (left, right) =>
               Math.abs(left.order.price - quote.price) - Math.abs(right.order.price - quote.price),
           )[0]?.index;
-        await this.placeQuote(market, quote);
         if (replacementIndex !== undefined) {
           const [replaced] = unmatchedCancel.splice(replacementIndex, 1);
           if (replaced) await this.cancelRemote([replaced], "quote-replacement");
         }
+        if (this.locked) return;
+        await this.placeQuote(market, quote);
       }
       if (unmatchedCancel.length > 0) {
         await this.cancelRemote(unmatchedCancel, "quote-removal");
@@ -259,10 +260,17 @@ export class LiveExecutor implements QuoteExecutor {
   }
 
   private async validateQuotes(quotes: readonly Quote[]): Promise<Quote[]> {
-    const accountOrders = await this.gateway.listOpenOrders();
-    const otherOrderNotional = accountOrders
-      .filter((order) => order.conditionId !== this.options.conditionId)
-      .reduce((sum, order) => sum + order.price * Math.max(0, order.size - order.matchedSize), 0);
+    const accountOrders =
+      this.options.maxAccountNotional > 0 ? await this.gateway.listOpenOrders() : [];
+    const otherOrderNotional =
+      this.options.maxAccountNotional > 0
+        ? accountOrders
+            .filter((order) => order.conditionId !== this.options.conditionId)
+            .reduce(
+              (sum, order) => sum + order.price * Math.max(0, order.size - order.matchedSize),
+              0,
+            )
+        : 0;
     const positionNotional = [...this.positions.byToken.values()].reduce(
       (sum, position) => sum + Math.max(0, position),
       0,

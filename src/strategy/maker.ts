@@ -28,6 +28,10 @@ export interface ComplementMakerParameters {
   lastFillAtByToken?: ReadonlyMap<string, number>;
   ownBidsByToken?: ReadonlyMap<string, readonly { price: number; size: number }[]>;
   baitPositionRatio?: number;
+  maxImproveTicks?: number;
+  inventorySkew?: number;
+  pmDisagreePullTicks?: number;
+  pmDisagreeHalt?: number;
 }
 
 export function longShareExposure(positions: PositionState): number {
@@ -169,6 +173,78 @@ export function complementTargetBuyPrices(
   return [1 - secondAsk, 1 - firstAsk];
 }
 
+export function skewFairsForInventory(
+  fairByOutcome: ReadonlyMap<string, number>,
+  market: ResolvedMarket,
+  positions: PositionState,
+  inventorySkew: number,
+): ReadonlyMap<string, number> {
+  if (!(inventorySkew > 0) || market.outcomes.length !== 2 || market.tokenIds.length !== 2) {
+    return fairByOutcome;
+  }
+  const firstOutcome = market.outcomes[0];
+  const secondOutcome = market.outcomes[1];
+  const firstTokenId = market.tokenIds[0];
+  const secondTokenId = market.tokenIds[1];
+  if (!firstOutcome || !secondOutcome || !firstTokenId || !secondTokenId) return fairByOutcome;
+  const firstFair = fairByOutcome.get(firstOutcome);
+  const secondFair = fairByOutcome.get(secondOutcome);
+  if (firstFair === undefined || secondFair === undefined) return fairByOutcome;
+
+  const delta =
+    inventorySkew *
+    ((positions.byToken.get(firstTokenId) ?? 0) - (positions.byToken.get(secondTokenId) ?? 0));
+  const skewed = new Map(fairByOutcome);
+  skewed.set(firstOutcome, clampPrice(firstFair - delta, market.tickSize));
+  skewed.set(secondOutcome, clampPrice(secondFair + delta, market.tickSize));
+  return skewed;
+}
+
+export function queueCappedBuyPrice(
+  theoreticalPrice: number,
+  sourceFair: number,
+  book: TokenBook,
+  tickSize: number,
+  maxImproveTicks = 2,
+  pmDisagreePullTicks = 2,
+  pmDisagreeHalt = 0.15,
+  extraImproveTicks = 0,
+): number | null {
+  const bestBid = book.bids[0]?.price;
+  const bestAsk = book.asks[0]?.price;
+  let safetyCap = floorToTick(
+    Math.min(theoreticalPrice, bestAsk === undefined ? theoreticalPrice : bestAsk - tickSize),
+    tickSize,
+  );
+
+  if (bestBid !== undefined && bestAsk !== undefined) {
+    const disagreement = Math.abs((bestBid + bestAsk) / 2 - sourceFair);
+    if (disagreement > pmDisagreeHalt + 1e-12) return null;
+    if (disagreement > 0.08 + 1e-12) {
+      const pullTicks = Math.max(0, Math.floor(pmDisagreePullTicks));
+      safetyCap = floorToTick(safetyCap - pullTicks * tickSize, tickSize);
+    }
+  }
+
+  const improveTicks =
+    Math.max(0, Math.floor(maxImproveTicks)) + Math.max(0, Math.floor(extraImproveTicks));
+  const rawTop =
+    bestBid === undefined ? safetyCap : Math.min(safetyCap, bestBid + improveTicks * tickSize);
+  const topPrice = clampPrice(floorToTick(rawTop, tickSize), tickSize);
+  if (bestAsk !== undefined && topPrice >= bestAsk) return null;
+  return topPrice;
+}
+
+function inventorySizeMultiplier(
+  currentPosition: number,
+  oppositePosition: number,
+  positionCap: number,
+): number {
+  if (!(positionCap > 0)) return 1;
+  const imbalance = Math.max(-1, Math.min(1, (currentPosition - oppositePosition) / positionCap));
+  return imbalance >= 0 ? 1 - 0.65 * imbalance : 1 + 0.35 * -imbalance;
+}
+
 export function buildManualBuyQuotes(input: {
   outcome: string;
   tokenId: string;
@@ -262,8 +338,14 @@ export function generateComplementBuyQuotes(
   positions: PositionState,
   parameters: ComplementMakerParameters,
 ): Quote[] {
-  const firstFair = fairByOutcome.get(market.outcomes[0]);
-  const secondFair = fairByOutcome.get(market.outcomes[1]);
+  const skewedFairs = skewFairsForInventory(
+    fairByOutcome,
+    market,
+    positions,
+    parameters.inventorySkew ?? 0,
+  );
+  const firstFair = skewedFairs.get(market.outcomes[0]);
+  const secondFair = skewedFairs.get(market.outcomes[1]);
   if (firstFair === undefined || secondFair === undefined) {
     throw new Error("missing fair probabilities for complementary quotes");
   }
@@ -300,6 +382,9 @@ export function generateComplementBuyQuotes(
     const book = books.get(tokenId);
     if (!book) throw new Error(`missing complementary quote book for ${outcome}`);
     const currentPosition = positions.byToken.get(tokenId) ?? 0;
+    const oppositeTokenId = market.tokenIds[1 - index];
+    const oppositePosition =
+      oppositeTokenId === undefined ? 0 : (positions.byToken.get(oppositeTokenId) ?? 0);
     if (
       sideIsBaited(
         currentPosition,
@@ -309,16 +394,37 @@ export function generateComplementBuyQuotes(
     ) {
       return;
     }
-    const bestAsk = book.asks[0]?.price;
-    const postOnlyPrice =
-      bestAsk === undefined ? rawPrice : Math.min(rawPrice, bestAsk - market.tickSize);
-    const topPrice = clampPrice(floorToTick(postOnlyPrice, market.tickSize), market.tickSize);
-    if (bestAsk !== undefined && topPrice >= bestAsk) return;
+    const sourceFair = fairByOutcome.get(outcome);
+    if (sourceFair === undefined) {
+      throw new Error(`missing source fair probability for ${outcome}`);
+    }
+    const topPrice = queueCappedBuyPrice(
+      rawPrice,
+      sourceFair,
+      book,
+      market.tickSize,
+      parameters.maxImproveTicks ?? 2,
+      parameters.pmDisagreePullTicks ?? 2,
+      parameters.pmDisagreeHalt ?? 0.15,
+      oppositePosition > currentPosition + 1e-9 ? 1 : 0,
+    );
+    if (topPrice === null) return;
     let positionCapacity = Math.max(0, parameters.maxOutcomePosition - currentPosition);
     const ownBids = parameters.ownBidsByToken?.get(tokenId) ?? [];
+    const sizeMultiplier = inventorySizeMultiplier(
+      currentPosition,
+      oppositePosition,
+      parameters.maxMarketNotional !== undefined && parameters.maxMarketNotional > 0
+        ? Math.min(parameters.maxOutcomePosition, parameters.maxMarketNotional)
+        : parameters.maxOutcomePosition,
+    );
+    const layerNotional = Math.min(
+      parameters.orderNotional * sizeMultiplier,
+      parameters.maxOrderNotional,
+    );
     const layerShares = Math.max(
       market.minOrderSize,
-      parameters.orderNotional / Math.max(topPrice, market.tickSize),
+      layerNotional / Math.max(topPrice, market.tickSize),
     );
     const levels = parameters.adaptiveLadder
       ? adaptiveQuoteLevels({
@@ -348,7 +454,7 @@ export function generateComplementBuyQuotes(
       previousPrice = price;
 
       const notionalCapacity = Math.min(parameters.maxOrderNotional, availableNotional);
-      const targetNotional = Math.min(parameters.orderNotional, notionalCapacity);
+      const targetNotional = Math.min(layerNotional, notionalCapacity);
       const size = Math.min(positionCapacity, targetNotional / price);
       if (size + 1e-12 < market.minOrderSize || price * size <= 0) break;
 

@@ -604,8 +604,9 @@ export function MatchConfigDesk({
               <div>
                 <h2 className="m-0 text-lg font-medium">盘口与挂单参数</h2>
                 <p className="mt-1.5 text-sm leading-relaxed text-mute">
-                  全场和小局都用同一张票：勾选即启用，顶部打开自动跟赔后按源赔率双边跟价。空簿会在目标价下铺
-                  55/54/53¢ 这类多层；附近已有做市商则只挂顶档。保存或启动自动跟赔后会直接挂单。
+                  全场和小局都用同一张票：勾选即启用，顶部打开自动跟赔后按源赔率双边跟价。有买一时最多比买一抬
+                  2
+                  tick，不会跳到理论价中间；空簿才按理论安全价铺档。保存或启动自动跟赔后会直接挂单。
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -693,7 +694,9 @@ export function MatchConfigDesk({
                 {(autoReturnRate * 100).toFixed(0)}% 表示再加{" "}
                 {((1 - autoReturnRate) * 100).toFixed(0)} 个点：卖价合计 = 源隐含 +{" "}
                 {((1 - autoReturnRate) * 100).toFixed(0)}
-                ¢，买单合计更低。源赔率变动超过当前挂价后自动改价。附近没有其他做市商时会在目标价下面再铺几层；顶档被吃掉后会等一会儿再补，单边仓位过重就停这一边。
+                ¢，买单合计更低。源赔率变动超过当前挂价后自动改价。有买一时最多比买一抬 2
+                tick，空簿才按理论安全价铺档；单边仓位会压报价、加大对边对冲，而不是只在 60%
+                停掉。顶档被吃掉后会等一会儿再补。
               </p>
               {autoFollow ? (
                 <div className="grid items-end gap-2.5 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
@@ -728,8 +731,8 @@ export function MatchConfigDesk({
             </div>
             {limits && (
               <p className="mb-4 mt-0 text-xs leading-relaxed text-mute">
-                限价买单锁定的是价格 × 股数的 USDC，不是股份面额。$400 余额大约能挂 4 万股
-                1¢ 单。全场/单局单盘仍限制 ${limits.maxGameNotional}，让分/总数 $
+                限价买单锁定的是价格 × 股数的 USDC，不是股份面额。$400 余额大约能挂 4 万股 1¢
+                单。全场/单局单盘仍限制 ${limits.maxGameNotional}，让分/总数 $
                 {limits.maxMapNotional}。
               </p>
             )}

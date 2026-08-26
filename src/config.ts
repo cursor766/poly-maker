@@ -58,6 +58,7 @@ const envSchema = z
     ORDER_NOTIONAL: z.coerce.number().positive().default(5),
     QUOTE_LEVELS: z.coerce.number().int().positive().max(10).default(3),
     QUOTE_LEVEL_SPACING_TICKS: z.coerce.number().int().positive().default(2),
+    QUOTE_IMPROVE_TICKS: z.coerce.number().int().positive().max(10).default(2),
     MAX_OUTCOME_POSITION: z.coerce.number().positive().default(2000),
     MAX_TOTAL_EXPOSURE: z.coerce.number().positive().default(2000),
     MAX_ORDER_NOTIONAL: z.coerce.number().positive().default(300),
