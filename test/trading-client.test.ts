@@ -143,7 +143,7 @@ test("create reuses cached credentials on the next start", async () => {
   });
 });
 
-test("create drops a rejected cache and retries without credentials", async () => {
+test("create drops a rejected cache and retries with freshly derived credentials", async () => {
   await withTradingOptions(async (options) => {
     options.createSecureClientFactory = async () => fakeSecureClient();
     await PolymarketTradingClient.create(options);
@@ -154,8 +154,13 @@ test("create drops a rejected cache and retries without credentials", async () =
       passphrase: "replacement-passphrase",
     };
     const received: Array<SecureClientOptions["credentials"]> = [];
+    let deriveCalls = 0;
     await PolymarketTradingClient.create({
       ...options,
+      deriveCredentialsFactory: async () => {
+        deriveCalls += 1;
+        return replacement;
+      },
       createSecureClientFactory: async (factoryOptions) => {
         received.push(factoryOptions.credentials);
         if (received.length === 1) {
@@ -167,7 +172,8 @@ test("create drops a rejected cache and retries without credentials", async () =
       },
     });
 
-    assert.deepEqual(received, [CREDENTIALS, undefined]);
+    assert.deepEqual(received, [CREDENTIALS, replacement]);
+    assert.equal(deriveCalls, 1);
 
     let nextCredentials: SecureClientOptions["credentials"];
     await PolymarketTradingClient.create({

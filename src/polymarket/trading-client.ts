@@ -83,6 +83,7 @@ export interface AuthRetryOptions {
 
 const DEFAULT_AUTH_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000] as const;
 const DEFAULT_CREDENTIALS_PATH = "data/clob-api-creds.json";
+export const CLOB_AUTH_REQUEST_TIMEOUT_MS = 30_000;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -230,7 +231,7 @@ async function deriveCredentials(
     const response = await fetch(new URL(path, clobUrl), {
       method,
       headers: requestHeaders,
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(CLOB_AUTH_REQUEST_TIMEOUT_MS),
     });
     if (!response.ok) {
       const error = new Error(`CLOB auth request rejected (${response.status})`) as Error & {
@@ -322,14 +323,10 @@ export class PolymarketTradingClient implements TradingGateway {
     });
     const signer = privateKey(signerPrivateKey);
     const factory = options.createSecureClientFactory ?? createSecureClient;
+    const derive = options.deriveCredentialsFactory ?? deriveCredentials;
     const credentials =
       cachedCredentials ??
-      (await (options.deriveCredentialsFactory ?? deriveCredentials)(
-        options.clobUrl,
-        options.chainId,
-        signerPrivateKey,
-        retry,
-      ));
+      (await derive(options.clobUrl, options.chainId, signerPrivateKey, retry));
     let client: SecureClient;
     try {
       client = await retry(() =>
@@ -343,10 +340,17 @@ export class PolymarketTradingClient implements TradingGateway {
     } catch (error) {
       if (!cachedCredentials || !isInvalidCredentialsError(error)) throw error;
       await deleteCachedCredentials(credentialsPath);
+      const freshCredentials = await derive(
+        options.clobUrl,
+        options.chainId,
+        signerPrivateKey,
+        retry,
+      );
       client = await retry(() =>
         factory({
           wallet: options.funder,
           signer,
+          credentials: freshCredentials,
           environment,
         }),
       );
