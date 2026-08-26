@@ -225,9 +225,11 @@ async function deriveCredentials(
     path: string,
   ): Promise<ClobApiCredentials> => {
     const headers = await createL1Headers(signer, chainId);
+    const requestHeaders = new Headers();
+    for (const [name, value] of Object.entries(headers)) requestHeaders.set(name, String(value));
     const response = await fetch(new URL(path, clobUrl), {
       method,
-      headers,
+      headers: requestHeaders,
       signal: AbortSignal.timeout(10_000),
     });
     if (!response.ok) {
