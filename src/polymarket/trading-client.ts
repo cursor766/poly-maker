@@ -12,7 +12,7 @@ import {
 } from "@polymarket/client";
 import { fetchBalanceAllowance } from "@polymarket/client/actions";
 import { privateKey } from "@polymarket/client/viem";
-import { ClobClient, SignatureType } from "@polymarket/clob-client";
+import { ClobClient, createL1Headers, SignatureType } from "@polymarket/clob-client";
 import type { Logger } from "pino";
 import { createWalletClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -73,7 +73,6 @@ type DeriveCredentialsFactory = (
   clobUrl: string,
   chainId: number,
   signerPrivateKey: string,
-  funder: string,
   retry: <T>(operation: () => Promise<T>) => Promise<T>,
 ) => Promise<ClobApiCredentials>;
 
@@ -217,19 +216,41 @@ async function deriveCredentials(
   clobUrl: string,
   chainId: number,
   signerPrivateKey: string,
-  funder: string,
   retry: <T>(operation: () => Promise<T>) => Promise<T>,
 ): Promise<ClobApiCredentials> {
   const account = privateKeyToAccount(signerPrivateKey as `0x${string}`);
   const signer = createWalletClient({ account, chain: polygon, transport: http() });
-  const client = new ClobClient(clobUrl, chainId, signer, undefined, SignatureType.EOA, funder);
+  const requestCredentials = async (
+    method: "GET" | "POST",
+    path: string,
+  ): Promise<ClobApiCredentials> => {
+    const headers = await createL1Headers(signer, chainId);
+    const response = await fetch(new URL(path, clobUrl), {
+      method,
+      headers,
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) {
+      const error = new Error(`CLOB auth request rejected (${response.status})`) as Error & {
+        status: number;
+      };
+      error.status = response.status;
+      throw error;
+    }
+    const body = (await response.json()) as Record<string, unknown>;
+    const credentials = parseCredentials({
+      key: body.apiKey ?? body.key,
+      secret: body.secret,
+      passphrase: body.passphrase,
+    });
+    if (!credentials) throw new Error("CLOB auth returned invalid credentials");
+    return credentials;
+  };
   try {
-    const credentials = await retry(() => client.deriveApiKey());
-    return { ...credentials, key: toApiKey(credentials.key) };
+    return await retry(() => requestCredentials("GET", "/auth/derive-api-key"));
   } catch (error) {
     if (!isMissingDerivedKeyError(error)) throw error;
-    const credentials = await retry(() => client.createApiKey());
-    return { ...credentials, key: toApiKey(credentials.key) };
+    return retry(() => requestCredentials("POST", "/auth/api-key"));
   }
 }
 
@@ -305,7 +326,6 @@ export class PolymarketTradingClient implements TradingGateway {
         options.clobUrl,
         options.chainId,
         signerPrivateKey,
-        options.funder,
         retry,
       ));
     let client: SecureClient;
