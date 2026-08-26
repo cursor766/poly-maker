@@ -3,7 +3,7 @@ import type { PositionState, Quote, ResolvedMarket, RestingOrder, TokenBook } fr
 import type { QuoteExecutor } from "./executor.js";
 
 function quoteKey(quote: Quote): string {
-  return `${quote.tokenId}:${quote.side}`;
+  return `${quote.tokenId}:${quote.side}:${quote.price.toFixed(4)}`;
 }
 
 function paperOrderId(quote: Quote): string {

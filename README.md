@@ -47,7 +47,7 @@ ORDER_NOTIONAL=5
 QUOTE_LEVELS=3
 QUOTE_LEVEL_SPACING_TICKS=2
 MAX_ORDER_NOTIONAL=5
-MAX_ACCOUNT_NOTIONAL=30
+MAX_ACCOUNT_NOTIONAL=0
 ```
 
 `shadow` 启动时会验证 Deposit Wallet 身份、Polygon 137、closed-only 状态、
@@ -60,9 +60,9 @@ LIVE_TRADING_ACK=I_UNDERSTAND_REAL_ORDERS_WILL_BE_PLACED
 LIVE_TRADING_ACK_2=ENABLE_TYPE3_LIVE_FOR_ALLOWLIST_ONLY
 ```
 
-上述多层配置会在每个 outcome 挂 3 层、每层约 5 USDC，相邻层相差 2 个 tick；
-单个二元市场最多占用约 30 USDC。建议第一阶段白名单只放一个盘口，并保持很小的
-资金上限。私钥不得写入 `markets.json`、日志或版本库。
+上述多层配置会在每个 outcome 挂 3 层、每层约 5 USDC，相邻层相差 2 个 tick。
+`MAX_ACCOUNT_NOTIONAL=0` 表示不按账户占用拦截限价单；买单实际锁定的是 `价格 × 股数`。
+单个盘口仍受全场/单局与让分/总数上限约束。私钥不得写入 `markets.json`、日志或版本库。
 
 TUI 会显示 MQTT 连接状态、`marketId`、`matchId`、`oddId`、十进制赔率、
 隐含概率和二元市场去水概率。`OBSERVE_ONLY=true` 时不会请求 Gamma/CLOB，
@@ -110,8 +110,19 @@ pnpm web:dev
 ```
 
 打开 `http://127.0.0.1:3000`：优先用联赛扫描（KPL / KGL）批量配置全场胜负，或粘贴两个 URL
-精细配置各局。确认队伍方向后保存并启动。运行中的市场配置会自动热加载；交易台通过 SSE
+精细配置各局。勾选盘口或启动自动跟赔后会直接实盘挂单，无需再到交易台启动核心。运行中的市场配置会自动热加载；交易台通过 SSE
 显示连接、额度、挂单和风控原因。`live` 仍要求 `.env` 双重确认。
+
+关掉终端后仍要继续挂单时，用 pm2 拉起控制 API 和前端（做市子进程由控制 API 拉起）：
+
+```bash
+pnpm add -g pm2
+pnpm pm2:start
+pm2 save
+pm2 startup
+```
+
+笔记本合盖休眠仍会暂停全部进程；需要不间断挂单时请关掉系统休眠，或放到一台一直开机的机器 / VPS 上跑。`pnpm pm2:logs` 看输出，`pnpm pm2:stop` 停掉。
 
 联赛扫描按 `tournament_id` 区分 KPL 与 KGL，再用队名 + 开赛时间对齐 Polymarket。
 默认只选择高置信、且买一加 1 tick 仍低于源赔率安全上限的全场盘；确认后每边一层 BUY。
@@ -121,6 +132,7 @@ pnpm web:dev
 ```bash
 pnpm web:api
 pnpm web:dev
+pnpm pm2:start
 pnpm observe
 pnpm check
 pnpm build
@@ -145,5 +157,9 @@ raw_i = 1 / o_i
 fair_i = raw_i / (raw_1 + raw_2)
 ```
 
-例如 `1.962 / 1.804` 去水后约为 `47.9% / 52.1%`。`odd_group` 的业务含义尚未
+例如 `1.962 / 1.804` 去水后约为 `47.9% / 52.1%`，源站 overround 约 `105.3%`。自动跟赔
+挂单时不去掉这笔水分，再额外加目标抽水（95% 回报 = +5 个点），卖价合计 =
+`overround + 5¢`，互补买单合计 = `200¢ − 卖价合计`。
+
+`odd_group` 的业务含义尚未
 验证，因此首版只使用消息顶层 `odd`。

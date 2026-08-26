@@ -1,5 +1,6 @@
 import { Button } from "@/app/components/ui";
 import type { DeskMarketSnapshot, RestingOrder, RuntimeMarket, TradingMode } from "@/lib/api";
+import { annotateBookLevels } from "@/lib/own-book";
 
 const reasonLabels: Record<string, string> = {
   "mqtt-disconnected": "源站连接断开",
@@ -40,6 +41,29 @@ function timeLabel(at: number): string {
   return new Date(at).toLocaleTimeString("zh-CN", { hour12: false });
 }
 
+function sumOrNull(values: Array<number | null | undefined>): number | null {
+  if (values.some((value) => value === null || value === undefined || !Number.isFinite(value))) {
+    return null;
+  }
+  return values.reduce<number>((sum, value) => sum + (value ?? 0), 0);
+}
+
+function bookEconomics(market: RuntimeMarket) {
+  const tick = market.tickSize ?? 0.01;
+  const outcomes = market.outcomes ?? (Object.keys(market.fairPrices) as [string, string]);
+  const fairs = outcomes.map((outcome) => market.fairPrices[outcome] ?? 0);
+  const asks = outcomes.map((outcome) => market.books?.[outcome]?.asks[0]?.price);
+  const bids = outcomes.map((outcome) => market.books?.[outcome]?.bids[0]?.price);
+  const queues = bids.map((bid) => (bid === undefined ? undefined : bid + tick));
+  const fairSum = sumOrNull(fairs);
+  const askSum = sumOrNull(asks);
+  const bidSum = sumOrNull(bids);
+  const queueSum = sumOrNull(queues);
+  const targetRate = market.targetReturnRate ?? 0.8;
+  const targetBuyCap = 2 - 1 / targetRate;
+  return { fairSum, askSum, bidSum, queueSum, targetRate, targetBuyCap, tick };
+}
+
 export function MarketStatusCard({
   market,
   desk,
@@ -59,13 +83,19 @@ export function MarketStatusCard({
 }) {
   const outcomes = market.outcomes ?? (Object.keys(market.fairPrices) as [string, string]);
   const openOrders = market.openOrders ?? [];
+  const plannedQuotes = market.plannedQuotes ?? [];
   const quoting = !market.locked && !market.operatorPaused;
+  const economics = bookEconomics(market);
+  const bothFillProfit =
+    economics.queueSum !== null && economics.queueSum > 0 && economics.queueSum < 1
+      ? 1 - economics.queueSum
+      : null;
+  const canJoinQueue =
+    economics.queueSum !== null && economics.queueSum <= economics.targetBuyCap + 1e-9;
 
   return (
     <article className="relative overflow-hidden rounded-[10px] border border-line bg-panel">
-      <span
-        className={`absolute inset-y-0 left-0 w-0.5 ${quoting ? "bg-gold" : "bg-rose"}`}
-      />
+      <span className={`absolute inset-y-0 left-0 w-0.5 ${quoting ? "bg-gold" : "bg-rose"}`} />
       <header className="flex flex-wrap items-start justify-between gap-3.5 border-b border-line px-5 py-4">
         <div>
           <span className="text-[11px] font-medium tracking-wide text-gold">
@@ -93,6 +123,32 @@ export function MarketStatusCard({
           )}
         </div>
       </header>
+
+      <section className="grid gap-px border-b border-line bg-line sm:grid-cols-2 xl:grid-cols-4">
+        <EconCell label="公平价合计" value={economics.fairSum} hint="去水后两边之和，应接近 100¢" />
+        <EconCell label="卖一合计" value={economics.askSum} hint="盘口水分 = 卖一合计 − 100¢" />
+        <EconCell label="买一合计" value={economics.bidSum} hint="排队价 = 买一 + 1 tick" />
+        <div className="bg-panel px-5 py-3">
+          <span className="text-[11px] text-mute">双边成交利润</span>
+          <b className="mt-1 block tabular-nums">
+            {bothFillProfit === null
+              ? "—"
+              : `${cents(bothFillProfit)} / ${((bothFillProfit / (economics.queueSum ?? 1)) * 100).toFixed(1)}%`}
+          </b>
+          <p className="mt-1 mb-0 text-[11px] text-mute">
+            排队合计 {economics.queueSum === null ? "—" : cents(economics.queueSum)} · 目标买价上限{" "}
+            {cents(economics.targetBuyCap)}（返还 {(economics.targetRate * 100).toFixed(0)}%）
+            {canJoinQueue ? " · 可排队" : " · 当前买一过贵，无法按目标回报排队"}
+          </p>
+        </div>
+      </section>
+
+      {mode === "shadow" && (
+        <div className="border-b border-line bg-amber/10 px-5 py-3 text-[13px] text-amber">
+          Shadow 只读，不会向 CLOB 提交或撤销挂单。要真正挂单：停止核心，改用 Paper 或 Live
+          启动。若计划价仍为空，把目标回报从 80% 提到约 95%（贴近源站返还）。
+        </div>
+      )}
 
       <div className="grid gap-px bg-line md:grid-cols-2">
         {outcomes.map((outcome) => (
@@ -137,6 +193,18 @@ export function MarketStatusCard({
                 </Button>
               </div>
             ))}
+          </div>
+        )}
+        {plannedQuotes.length > 0 && openOrders.length === 0 && (
+          <div className="mt-3 rounded-lg border border-line bg-inset px-3 py-2">
+            <span className="text-[11px] text-mute">计划挂单（尚未提交）</span>
+            <ul className="mt-1.5 mb-0 grid list-none gap-1 p-0 text-[13px]">
+              {plannedQuotes.map((quote) => (
+                <li key={`${quote.tokenId}-${quote.side}-${quote.price}`}>
+                  {quote.side} {quote.outcome} · {cents(quote.price)} × {quote.size.toFixed(2)}
+                </li>
+              ))}
+            </ul>
           </div>
         )}
       </section>
@@ -208,13 +276,29 @@ export function MarketStatusCard({
           </b>
         </div>
       </footer>
-      {(market.locked || market.rejectDetail || market.operatorPaused) && (
+      {(market.locked ||
+        market.rejectDetail ||
+        market.operatorPaused ||
+        market.quoteNote ||
+        (quoting && openOrders.length === 0)) && (
         <div className="border-t border-line px-5 py-3">
           <span className="text-[11px] text-mute">状态</span>
-          <strong className="mt-1 block text-[13px] font-medium">{reasonText(market)}</strong>
+          <strong className="mt-1 block text-[13px] font-medium">
+            {market.quoteNote ?? reasonText(market)}
+          </strong>
         </div>
       )}
     </article>
+  );
+}
+
+function EconCell({ label, value, hint }: { label: string; value: number | null; hint: string }) {
+  return (
+    <div className="bg-panel px-5 py-3">
+      <span className="text-[11px] text-mute">{label}</span>
+      <b className="mt-1 block tabular-nums">{value === null ? "—" : cents(value)}</b>
+      <p className="mt-1 mb-0 text-[11px] text-mute">{hint}</p>
+    </div>
   );
 }
 
@@ -231,9 +315,8 @@ function OrderBookPane({
   book?: RuntimeMarket["books"][string];
   orders: RestingOrder[];
 }) {
-  const ourPrices = new Set(orders.map((order) => order.price.toFixed(4)));
-  const asks = [...(book?.asks ?? [])].slice(0, 6).reverse();
-  const bids = (book?.bids ?? []).slice(0, 6);
+  const asks = [...annotateBookLevels(book?.asks ?? [], orders, "SELL", "ask").slice(0, 6)].reverse();
+  const bids = annotateBookLevels(book?.bids ?? [], orders, "BUY", "bid").slice(0, 6);
   return (
     <div className="bg-raised px-5 py-4">
       <div className="mb-3 flex justify-between gap-2.5">
@@ -246,21 +329,11 @@ function OrderBookPane({
       </div>
       <div className="grid gap-px font-mono text-[11px]">
         {asks.map((level) => (
-          <BookRow
-            key={`ask-${level.price}`}
-            level={level}
-            ours={ourPrices.has(level.price.toFixed(4))}
-            side="ask"
-          />
+          <BookRow key={`ask-${level.price}`} level={level} ours={level.ours} side="ask" />
         ))}
         <div className="py-1 text-center text-[10px] tracking-[0.16em] text-mute-2">SPREAD</div>
         {bids.map((level) => (
-          <BookRow
-            key={`bid-${level.price}`}
-            level={level}
-            ours={ourPrices.has(level.price.toFixed(4))}
-            side="bid"
-          />
+          <BookRow key={`bid-${level.price}`} level={level} ours={level.ours} side="bid" />
         ))}
         {asks.length === 0 && bids.length === 0 ? (
           <div className="py-3 text-center text-mute">等待订单簿…</div>
@@ -276,18 +349,19 @@ function BookRow({
   side,
 }: {
   level: { price: number; size: number };
-  ours: boolean;
+  ours: number;
   side: "bid" | "ask";
 }) {
+  const oursActive = ours > 0;
   return (
     <div
       className={`flex justify-between rounded-sm px-1.5 py-0.5 ${
-        ours ? "bg-gold/15 text-gold" : side === "bid" ? "text-sage" : "text-rose"
+        oursActive ? "bg-gold/15 text-gold" : side === "bid" ? "text-sage" : "text-rose"
       }`}
     >
       <span>{cents(level.price)}</span>
       <span>{level.size.toFixed(1)}</span>
-      {ours ? <span>我们</span> : <span />}
+      {oursActive ? <span>我们 {ours.toFixed(ours >= 10 ? 0 : 1)}</span> : <span />}
     </div>
   );
 }

@@ -7,6 +7,7 @@ import { createWalletClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { polygon } from "viem/chains";
 import type { AuditLog } from "../logger.js";
+import { clobPrice, clobSize } from "../strategy/tick.js";
 import type { ManagedOrder, PositionState, Quote } from "../types.js";
 
 export interface TradingPreflight {
@@ -172,8 +173,8 @@ export class PolymarketTradingClient implements TradingGateway {
     if (quote.side !== "BUY") throw new Error("live type=3 execution permits BUY-only orders");
     const response = await this.client.placeLimitOrder({
       tokenId: quote.tokenId,
-      price: quote.price,
-      size: quote.size,
+      price: clobPrice(quote.price),
+      size: clobSize(quote.size),
       side: OrderSide.BUY,
       postOnly: true,
     });

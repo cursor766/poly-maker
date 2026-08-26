@@ -1,19 +1,21 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import {
   api,
   type LeagueCandidate,
   type LeagueDiscoveryResult,
   type LeagueSummary,
+  type MarketPreview,
   type RuntimeLimits,
 } from "@/lib/api";
+import { ensureMakerRunning } from "@/lib/maker-session";
+import { matchConfigPath } from "@/lib/match-route";
 import { Button, errorClass, inputClass, panelClass, successClass } from "./ui";
-import { ExposureBar } from "./ExposureBar";
 
 interface LeagueAutoMakerProps {
   limits: RuntimeLimits | null;
-  makerRunning: boolean;
   onSaved: () => Promise<void>;
 }
 
@@ -38,13 +40,16 @@ function pct(value: number): string {
   return `${(value * 100).toFixed(0)}%`;
 }
 
-export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMakerProps) {
+export function LeagueAutoMaker({ limits, onSaved }: LeagueAutoMakerProps) {
   const [leagues, setLeagues] = useState<LeagueSummary[]>([]);
   const [leagueId, setLeagueId] = useState("kpl");
   const [result, setResult] = useState<LeagueDiscoveryResult | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [swapped, setSwapped] = useState<Set<string>>(new Set());
   const [orderNotional, setOrderNotional] = useState(5);
+  const [targetReturnRate, setTargetReturnRate] = useState(0.95);
+  const [includeGameWinners, setIncludeGameWinners] = useState(false);
+  const [includeMapMarkets, setIncludeMapMarkets] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -57,8 +62,6 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
     () => candidates.filter((candidate) => selected.has(candidate.sourceMatchId)),
     [candidates, selected],
   );
-  const estimatedNotional = selectedCandidates.length * orderNotional * 2;
-  const budgetExceeded = limits !== null && estimatedNotional > limits.maxAccountNotional + 1e-9;
 
   useEffect(() => {
     void api<{ leagues: LeagueSummary[] }>("/api/leagues")
@@ -118,8 +121,13 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
   async function saveBatch() {
     if (selectedCandidates.length === 0 || !limits) return;
     const reviewCount = selectedCandidates.filter((candidate) => candidate.reason).length;
+    const extras = [includeGameWinners ? "局胜者" : "", includeMapMarkets ? "地图让分/总数" : ""]
+      .filter(Boolean)
+      .join("、");
     const confirmed = window.confirm(
-      `将配置 ${selectedCandidates.length} 场 ${activeLeague?.shortName ?? "联赛"} 全场胜负，每边一层、每层 $${orderNotional.toFixed(2)}${
+      `将配置 ${selectedCandidates.length} 场 ${activeLeague?.shortName ?? "联赛"} 全场胜负${
+        extras ? `，并尽量带上${extras}` : ""
+      }，每边一层、每层 $${orderNotional.toFixed(2)}、目标回报 ${(targetReturnRate * 100).toFixed(0)}%${
         reviewCount > 0 ? `。其中 ${reviewCount} 场未通过自动安全检查，需你自行确认。` : "。"
       }确认继续？`,
     );
@@ -127,11 +135,28 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
     setBusy(true);
     setError("");
     try {
-      await api(`/api/leagues/${leagueId}/config`, {
-        method: "POST",
-        body: JSON.stringify({
-          matches: selectedCandidates.map((candidate) => {
-            const reverse = swapped.has(candidate.sourceMatchId);
+      const matches = await Promise.all(
+        selectedCandidates.map(async (candidate) => {
+          const reverse = swapped.has(candidate.sourceMatchId);
+          const winnerMarket = {
+            name: `${candidate.teams.join(" vs ")} - 全场胜负`,
+            enabled: true,
+            sourceMarketId: candidate.market.sourceMarketId,
+            polymarketSlug: candidate.market.polymarketSlug,
+            round: 0,
+            quoteMode: "top-of-book" as const,
+            outcomes: candidate.market.outcomes.map((outcome, index) => ({
+              sourceOddId: outcome.sourceOddId,
+              outcome:
+                candidate.market.outcomes[reverse ? 1 - index : index]
+                  ?.suggestedPolymarketOutcome ?? outcome.suggestedPolymarketOutcome,
+            })),
+            orderNotional,
+            quoteLevels: 1,
+            levelSpacingTicks: 1,
+            targetReturnRate,
+          };
+          if (!includeGameWinners && !includeMapMarkets) {
             return {
               sourceMatchId: candidate.sourceMatchId,
               polymarketEventSlug: candidate.eventSlug,
@@ -139,36 +164,59 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
               polymarketUrl: candidate.polymarketUrl,
               teams: candidate.teams,
               tournament: candidate.tournament,
-              markets: [
-                {
-                  name: `${candidate.teams.join(" vs ")} - 全场胜负`,
-                  enabled: true,
-                  sourceMarketId: candidate.market.sourceMarketId,
-                  polymarketSlug: candidate.market.polymarketSlug,
-                  round: 0,
-                  quoteMode: "top-of-book",
-                  outcomes: candidate.market.outcomes.map((outcome, index) => ({
-                    sourceOddId: outcome.sourceOddId,
-                    outcome:
-                      candidate.market.outcomes[reverse ? 1 - index : index]
-                        ?.suggestedPolymarketOutcome ?? outcome.suggestedPolymarketOutcome,
-                  })),
-                  orderNotional,
-                  quoteLevels: 1,
-                  levelSpacingTicks: 1,
-                  targetReturnRate: limits.makerTargetReturnRate,
-                },
-              ],
+              markets: [winnerMarket],
             };
-          }),
+          }
+          const preview = await api<MarketPreview>("/api/preview", {
+            method: "POST",
+            body: JSON.stringify({
+              sourceUrl: candidate.sourceUrl,
+              polymarketUrl: candidate.polymarketUrl,
+            }),
+          });
+          const extraMarkets = preview.markets.filter((market) => {
+            const kind = market.kind ?? (market.round === 0 ? "moneyline" : "child_moneyline");
+            if (kind === "moneyline") return false;
+            if (includeGameWinners && kind === "child_moneyline") return true;
+            if (includeMapMarkets && (kind === "map_handicap" || kind === "totals")) return true;
+            return false;
+          });
+          return {
+            sourceMatchId: candidate.sourceMatchId,
+            polymarketEventSlug: candidate.eventSlug,
+            sourceUrl: candidate.sourceUrl,
+            polymarketUrl: candidate.polymarketUrl,
+            teams: candidate.teams,
+            tournament: candidate.tournament,
+            markets: [
+              winnerMarket,
+              ...extraMarkets.map((market) => ({
+                name: `${preview.teams.join(" vs ")} - ${market.name}`,
+                enabled: market.tradable,
+                sourceMarketId: market.sourceMarketId,
+                polymarketSlug: market.polymarketSlug,
+                round: market.round,
+                quoteMode: "top-of-book" as const,
+                outcomes: market.outcomes.map((outcome) => ({
+                  sourceOddId: outcome.sourceOddId,
+                  outcome: outcome.suggestedPolymarketOutcome,
+                })),
+                orderNotional,
+                quoteLevels: 1,
+                levelSpacingTicks: 1,
+                targetReturnRate,
+              })),
+            ],
+          };
         }),
-      });
-      await onSaved();
-      setMessage(
-        makerRunning
-          ? "批量配置已写入，交易核心正在热加载。"
-          : "批量配置已写入，可到交易台启动核心。",
       );
+      await api(`/api/leagues/${leagueId}/config`, {
+        method: "POST",
+        body: JSON.stringify({ matches }),
+      });
+      await ensureMakerRunning();
+      await onSaved();
+      setMessage("批量配置已写入，正在实盘挂单。");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -185,8 +233,8 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
           </p>
           <h2 className="m-0 font-display text-[22px] font-medium tracking-tight">联赛一键做市</h2>
           <p className="mt-2 max-w-[62ch] text-sm leading-relaxed text-mute">
-            从源站拉开放赛程，按队名和时间对齐 Polymarket 全场胜负，只挂一层买一前 1
-            tick。方向仍需你确认。
+            从源站拉开放赛程，按队名和时间对齐 Polymarket。点进一场比赛再配置全场 / 小局 / 让分。
+            列表上仍可勾选后批量只挂全场。80% 目标回报通常挂不进当前买一，建议 95%。
           </p>
         </div>
         <div
@@ -219,7 +267,9 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <strong className="block text-[15px]">{activeLeague?.name ?? "King Pro League"}</strong>
-          <span className="text-sm text-mute">{activeLeague?.description ?? "王者荣耀职业联赛"}</span>
+          <span className="text-sm text-mute">
+            {activeLeague?.description ?? "王者荣耀职业联赛"}
+          </span>
         </div>
         <Button disabled={busy} onClick={() => void discover()}>
           {busy ? "正在扫描…" : result ? `重新扫描 ${activeLeague?.shortName ?? ""}` : "扫描赛程"}
@@ -233,16 +283,28 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
         <>
           <div className="mb-4 grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
             <div className="rounded-xl border border-line bg-inset px-4 py-3.5">
-              <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">可配置</span>
-              <b className="mt-1.5 block font-display text-xl font-medium">{result.matched.length}</b>
+              <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">
+                可配置
+              </span>
+              <b className="mt-1.5 block font-display text-xl font-medium">
+                {result.matched.length}
+              </b>
             </div>
             <div className="rounded-xl border border-line bg-inset px-4 py-3.5">
-              <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">待复核</span>
-              <b className="mt-1.5 block font-display text-xl font-medium">{result.review.length}</b>
+              <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">
+                待复核
+              </span>
+              <b className="mt-1.5 block font-display text-xl font-medium">
+                {result.review.length}
+              </b>
             </div>
             <div className="rounded-xl border border-line bg-inset px-4 py-3.5">
-              <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">未匹配</span>
-              <b className="mt-1.5 block font-display text-xl font-medium">{result.rejected.length}</b>
+              <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">
+                未匹配
+              </span>
+              <b className="mt-1.5 block font-display text-xl font-medium">
+                {result.rejected.length}
+              </b>
             </div>
             <label className="rounded-xl border border-line bg-inset px-4 py-3.5 text-[11px] uppercase tracking-[0.16em] text-mute-2">
               每边额度
@@ -255,16 +317,19 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
                 value={orderNotional}
               />
             </label>
-          </div>
-          {limits && (
-            <div className="mb-4">
-              <ExposureBar
-                label="本次预计账户占用"
-                limit={limits.maxAccountNotional}
-                used={estimatedNotional}
+            <label className="rounded-xl border border-line bg-inset px-4 py-3.5 text-[11px] uppercase tracking-[0.16em] text-mute-2">
+              目标回报 %
+              <input
+                className={`${inputClass} mt-2`}
+                max="99"
+                min="50"
+                onChange={(event) => setTargetReturnRate(Number(event.target.value) / 100)}
+                step="1"
+                type="number"
+                value={Math.round(targetReturnRate * 100)}
               />
-            </div>
-          )}
+            </label>
+          </div>
 
           {candidates.length === 0 && (
             <div className="rounded-xl border border-dashed border-line px-4 py-8 text-center text-sm text-mute">
@@ -278,6 +343,10 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
               const reverse = swapped.has(candidate.sourceMatchId);
               const checked = selected.has(candidate.sourceMatchId);
               const needsReview = Boolean(candidate.reason);
+              const detailHref = matchConfigPath(candidate.eventSlug, {
+                sourceUrl: candidate.sourceUrl,
+                polymarketUrl: candidate.polymarketUrl,
+              });
               return (
                 <article
                   className={`rounded-[14px] border p-4 ${
@@ -302,41 +371,47 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
                         </small>
                       </span>
                     </label>
-                    <em className="text-xs not-italic text-mute">{pct(candidate.confidence)} 置信</em>
+                    <em className="text-xs not-italic text-mute">
+                      {pct(candidate.confidence)} 置信
+                    </em>
                   </header>
-                  <div className="grid grid-cols-[1fr_auto_1fr] items-stretch gap-2">
-                    {candidate.market.outcomes.map((outcome, index) => {
-                      const mapped =
-                        candidate.market.outcomes[reverse ? 1 - index : index]
-                          ?.suggestedPolymarketOutcome ?? outcome.suggestedPolymarketOutcome;
-                      const book = candidate.books[mapped];
-                      return (
-                        <div key={outcome.sourceOddId} className="contents">
-                          {index === 1 && (
-                            <div className="grid place-items-center px-1 text-[11px] font-semibold tracking-[0.18em] text-mute-2">
-                              VS
-                            </div>
-                          )}
-                          <div className="rounded-[10px] border border-line bg-raised p-3 text-center">
-                            <strong className="block text-[15px]">{outcome.sourceName}</strong>
-                            {candidate.englishTeams?.[index] && (
-                              <small className="mt-0.5 block text-[11px] text-mute-2">
-                                {candidate.englishTeams[index]}
-                              </small>
+                  <Link className="block text-ink no-underline" href={detailHref}>
+                    <div className="grid grid-cols-[1fr_auto_1fr] items-stretch gap-2">
+                      {candidate.market.outcomes.map((outcome, index) => {
+                        const mapped =
+                          candidate.market.outcomes[reverse ? 1 - index : index]
+                            ?.suggestedPolymarketOutcome ?? outcome.suggestedPolymarketOutcome;
+                        const book = candidate.books[mapped];
+                        return (
+                          <div key={outcome.sourceOddId} className="contents">
+                            {index === 1 && (
+                              <div className="grid place-items-center px-1 text-[11px] font-semibold tracking-[0.18em] text-mute-2">
+                                VS
+                              </div>
                             )}
-                            <b className="mt-2 block font-display text-2xl font-medium text-gold">
-                              {cents(book?.topPrice)}
-                            </b>
-                            <small className="mt-1 block font-mono text-[11px] text-mute">
-                              源 {outcome.decimalOdd.toFixed(2)} · 买一 {cents(book?.bestBid)} / 卖一{" "}
-                              {cents(book?.bestAsk)}
-                            </small>
-                            <small className="mt-1 block text-[11px] text-mute-2">→ {mapped}</small>
+                            <div className="rounded-[10px] border border-line bg-raised p-3 text-center">
+                              <strong className="block text-[15px]">{outcome.sourceName}</strong>
+                              {candidate.englishTeams?.[index] && (
+                                <small className="mt-0.5 block text-[11px] text-mute-2">
+                                  {candidate.englishTeams[index]}
+                                </small>
+                              )}
+                              <b className="mt-2 block font-display text-2xl font-medium text-gold">
+                                {cents(book?.topPrice)}
+                              </b>
+                              <small className="mt-1 block font-mono text-[11px] text-mute">
+                                源 {outcome.decimalOdd.toFixed(2)} · 买一 {cents(book?.bestBid)} /
+                                卖一 {cents(book?.bestAsk)}
+                              </small>
+                              <small className="mt-1 block text-[11px] text-mute-2">
+                                → {mapped}
+                              </small>
+                            </div>
                           </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+                        );
+                      })}
+                    </div>
+                  </Link>
                   {candidate.reason && (
                     <p className="mt-3 mb-0 rounded-lg border border-amber/25 bg-amber/10 px-3 py-2 text-xs text-amber">
                       {candidate.reason}
@@ -350,14 +425,22 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
                     </ul>
                   )}
                   <footer className="mt-3 flex items-center justify-between gap-3">
-                    <a
-                      className="text-xs font-medium text-mute hover:text-ink"
-                      href={candidate.polymarketUrl}
-                      rel="noreferrer"
-                      target="_blank"
-                    >
-                      Polymarket
-                    </a>
+                    <div className="flex items-center gap-3">
+                      <Link
+                        className="text-xs font-semibold text-gold hover:text-ink"
+                        href={detailHref}
+                      >
+                        配置小局
+                      </Link>
+                      <a
+                        className="text-xs font-medium text-mute hover:text-ink"
+                        href={candidate.polymarketUrl}
+                        rel="noreferrer"
+                        target="_blank"
+                      >
+                        Polymarket
+                      </a>
+                    </div>
                     <Button onClick={() => swap(candidate)} variant="ghost">
                       交换配对
                     </Button>
@@ -379,12 +462,29 @@ export function LeagueAutoMaker({ limits, makerRunning, onSaved }: LeagueAutoMak
               ))}
             </details>
           )}
-          <div className="mt-4">
+          <div className="mt-4 flex flex-wrap items-center gap-4">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                checked={includeGameWinners}
+                onChange={(event) => setIncludeGameWinners(event.target.checked)}
+                type="checkbox"
+              />
+              同时配置局胜者（G1–G6）
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                checked={includeMapMarkets}
+                onChange={(event) => setIncludeMapMarkets(event.target.checked)}
+                type="checkbox"
+              />
+              同时配置地图让分 / 总数（含 +3.5）
+            </label>
             <Button
-              disabled={busy || selectedCandidates.length === 0 || budgetExceeded}
+              disabled={busy || selectedCandidates.length === 0}
               onClick={() => void saveBatch()}
             >
-              确认配置 {selectedCandidates.length} 场全场
+              确认配置 {selectedCandidates.length} 场
+              {includeGameWinners || includeMapMarkets ? "及相关盘口" : "全场"}
             </Button>
           </div>
         </>

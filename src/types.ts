@@ -1,5 +1,6 @@
 export type TradingMode = "paper" | "shadow" | "live";
 export type QuoteMode = "two-sided" | "complement-buy" | "top-of-book";
+export type MappedMarketKind = "moneyline" | "child_moneyline" | "map_handicap" | "totals";
 
 export interface SourceOddUpdate {
   marketId: string;
@@ -74,6 +75,7 @@ export interface MarketMapping {
   outcomes: OutcomeMapping[];
   round?: number | undefined;
   quoteMode?: QuoteMode | undefined;
+  kind?: MappedMarketKind | undefined;
   orderNotional?: number | undefined;
   quoteLevels?: number | undefined;
   levelSpacingTicks?: number | undefined;

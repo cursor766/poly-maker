@@ -12,6 +12,8 @@ export interface PreviewOutcome {
 export interface PreviewMarket {
   name: string;
   round: number;
+  kind?: "moneyline" | "child_moneyline" | "map_handicap" | "totals";
+  line?: number | null;
   sourceMarketId: string;
   polymarketSlug: string;
   polymarketOutcomes: [string, string];
@@ -19,6 +21,8 @@ export interface PreviewMarket {
   minOrderSize: number;
   tradable: boolean;
   overround: number;
+  conditionId?: string;
+  tokenIds?: [string, string];
   outcomes: [PreviewOutcome, PreviewOutcome];
 }
 
@@ -60,6 +64,10 @@ export interface RuntimeMarket {
   operatorPaused: boolean;
   reason?: string;
   rejectDetail?: string;
+  quoteNote?: string;
+  tickSize?: number;
+  targetReturnRate?: number;
+  quoteMode?: "two-sided" | "complement-buy" | "top-of-book" | "manual";
   sourceOpen: boolean | null;
   sourceLocked: boolean;
   fairPrices: Record<string, number>;
@@ -98,6 +106,10 @@ export interface RuntimeLimits {
   maxOrderNotional: number;
   maxOutcomePosition: number;
   maxTotalExposure: number;
+  maxGameNotional: number;
+  maxMapNotional: number;
+  refillTopDelayMs: number;
+  baitPositionRatio: number;
   makerTargetReturnRate: number;
   oddsStaleMs: number;
   repriceThresholdTicks: number;
@@ -117,6 +129,7 @@ export interface MarketMapping {
   levelSpacingTicks?: number;
   targetReturnRate?: number;
   quoteMode?: "two-sided" | "complement-buy" | "top-of-book";
+  kind?: "moneyline" | "child_moneyline" | "map_handicap" | "totals";
 }
 
 export interface LeagueSummary {
@@ -215,6 +228,24 @@ export interface DeskMarketSnapshot {
 
 export interface DeskSnapshot {
   markets: Record<string, DeskMarketSnapshot>;
+}
+
+export interface MarketTapeBook {
+  bids: Array<{ price: number; size: number }>;
+  asks: Array<{ price: number; size: number }>;
+  receivedAt: number;
+}
+
+export interface MarketTapeSnapshot {
+  sourceMarketId: string;
+  conditionId: string;
+  books: Record<string, MarketTapeBook>;
+  trades: DeskTrade[];
+  error?: string;
+}
+
+export interface MarketTapeResponse {
+  markets: Record<string, MarketTapeSnapshot>;
 }
 
 export const controlApiUrl = process.env.NEXT_PUBLIC_CONTROL_API ?? "http://127.0.0.1:48787";

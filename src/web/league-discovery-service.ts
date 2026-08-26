@@ -1,4 +1,8 @@
-import type { ListedMoneylineEvent, MarketResolver } from "../polymarket/market-resolver.js";
+import {
+  isMatchWinnerMarket,
+  type ListedMoneylineEvent,
+  type MarketResolver,
+} from "../polymarket/market-resolver.js";
 import type { PolymarketOrderBookClient } from "../polymarket/orderbook-client.js";
 import type { ListedSourceMatch, MatchMetadataClient } from "../source/match-metadata-client.js";
 import { calculateTopOfBookPrice } from "../strategy/maker.js";
@@ -59,7 +63,7 @@ function scoreTeam(source: ListedSourceMatch, index: number, outcome: string): n
 }
 
 function scorePair(source: ListedSourceMatch, event: ListedMoneylineEvent): PairScore | null {
-  const market = event.markets.find((item) => item.round === 0);
+  const market = event.markets.find((item) => isMatchWinnerMarket(item));
   if (!market) return null;
   const direct = [
     scoreTeam(source, 0, market.outcomes[0]),
@@ -94,7 +98,7 @@ function topBookSummary(
   targetReturnRate: number,
   minEdge: number,
 ): LeagueCandidate["books"] {
-  const market = event.markets.find((item) => item.round === 0);
+  const market = event.markets.find((item) => isMatchWinnerMarket(item));
   if (!market) return {};
   return Object.fromEntries(
     candidate.outcomes.map((outcome, index) => {
@@ -116,6 +120,7 @@ function topBookSummary(
                   market.tickSize,
                   targetReturnRate,
                   minEdge + (market.feesEnabled ? 0.005 : 0),
+                  candidate.overround,
                 )
               : null,
         },
@@ -180,7 +185,7 @@ export class LeagueDiscoveryService {
         });
         continue;
       }
-      const polymarket = best.event.markets.find((item) => item.round === 0);
+      const polymarket = best.event.markets.find((item) => isMatchWinnerMarket(item));
       const builtPreview = polymarket
         ? buildMarkets(source.match, [polymarket], this.targetReturnRate)[0]
         : undefined;
@@ -231,7 +236,9 @@ export class LeagueDiscoveryService {
         usedEvents.has(best.event.slug);
       const notes: string[] = [];
       if (source.match.bestOf >= 7) {
-        notes.push("BO7：本流程只挂全场。Polymarket 通常只开到 G6，第 7 局不会自动配置。");
+        notes.push(
+          "BO7：一键默认只挂全场。局胜者与 +3.5 地图让分请在下方手动配置勾选；Polymarket 通常只开到 G6。",
+        );
       }
       const gameRounds = best.event.markets
         .map((market) => market.round)

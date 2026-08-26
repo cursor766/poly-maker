@@ -14,6 +14,10 @@ export interface MarketRuntimeStatus {
   operatorPaused: boolean;
   reason?: string;
   rejectDetail?: string;
+  quoteNote?: string;
+  tickSize: number;
+  targetReturnRate: number;
+  quoteMode: string;
   sourceOpen: boolean | null;
   sourceLocked: boolean;
   fairPrices: Record<string, number>;

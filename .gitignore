@@ -7,4 +7,5 @@ data/
 web/.next/
 web/out/
 .poly-maker.pid
+logs/
 web/tsconfig.tsbuildinfo

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { MarketResolver } from "../src/polymarket/market-resolver.js";
 import { parseSourceMatchList } from "../src/source/match-metadata-client.js";
-import { generateTopOfBookBuyQuotes } from "../src/strategy/maker.js";
+import { describeTopOfBookSkip, generateTopOfBookBuyQuotes } from "../src/strategy/maker.js";
 import type { PositionState, ResolvedMarket, TokenBook } from "../src/types.js";
 import { writeBatchMarketConfigs } from "../src/web/config-writer.js";
 import { leagueDiscoveryInternals } from "../src/web/league-discovery-service.js";
@@ -196,7 +196,7 @@ test("top-of-book mode skips a side when queue price exceeds source cap", () => 
       "a",
       {
         tokenId: "a",
-        bids: [{ price: 0.5, size: 10 }],
+        bids: [{ price: 0.52, size: 10 }],
         asks: [{ price: 0.55, size: 10 }],
         receivedAt: 1,
       },
@@ -236,6 +236,30 @@ test("top-of-book mode skips a side when queue price exceeds source cap", () => 
   );
 });
 
+test("top-of-book skip explains the binding cap on a KPL-like book", () => {
+  const edgBook = {
+    tokenId: "edg",
+    bids: [{ price: 0.6, size: 297.4 }],
+    asks: [{ price: 0.67, size: 191.5 }],
+    receivedAt: 1,
+  };
+  const lgdBook = {
+    tokenId: "lgd",
+    bids: [{ price: 0.33, size: 191.5 }],
+    asks: [{ price: 0.4, size: 297.4 }],
+    receivedAt: 1,
+  };
+  assert.match(
+    describeTopOfBookSkip(0.637, 0.363, edgBook, 0.01, 0.8, 0.025) ?? "",
+    /买一\+1tick 61\.0¢ 超过安全上限/,
+  );
+  assert.match(
+    describeTopOfBookSkip(0.363, 0.637, lgdBook, 0.01, 0.8, 0.025) ?? "",
+    /买一\+1tick 34\.0¢ 超过安全上限/,
+  );
+  assert.equal(describeTopOfBookSkip(0.637, 0.363, edgBook, 0.01, 0.95, 0.025), null);
+});
+
 test("batch config atomically forces one-layer top-of-book mappings", async () => {
   const directory = await mkdtemp(join(tmpdir(), "poly-maker-batch-"));
   const path = join(directory, "markets.json");
@@ -268,7 +292,7 @@ test("batch config atomically forces one-layer top-of-book mappings", async () =
     );
     assert.equal(mappings.length, 2);
     assert.ok(mappings.every((mapping) => mapping.quoteMode === "top-of-book"));
-    assert.ok(mappings.every((mapping) => mapping.quoteLevels === 1 && mapping.round === 0));
+    assert.ok(mappings.every((mapping) => mapping.quoteLevels === 1 && mapping.round === 3));
     assert.equal(JSON.parse(await readFile(path, "utf8")).length, 2);
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -310,6 +334,9 @@ test("league pairing uses both team names and rejects array-order guessing", () 
         feesEnabled: false,
         round: 0,
         tradable: true,
+        kind: "moneyline" as const,
+        line: null,
+        groupItemTitle: "",
       },
     ],
   };

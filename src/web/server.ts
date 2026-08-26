@@ -5,8 +5,8 @@ import { resolve } from "node:path";
 import { z } from "zod";
 import { loadConfig, loadMarketMappings } from "../config.js";
 import { createLogger } from "../logger.js";
-import { MarketResolver } from "../polymarket/market-resolver.js";
 import { PolymarketDataApiClient } from "../polymarket/data-api-client.js";
+import { MarketResolver } from "../polymarket/market-resolver.js";
 import { PolymarketOrderBookClient } from "../polymarket/orderbook-client.js";
 import { MatchMetadataClient } from "../source/match-metadata-client.js";
 import {
@@ -17,9 +17,10 @@ import {
   writeBatchMarketConfigs,
   writeMarketConfig,
 } from "./config-writer.js";
+import { enqueueDeskCommand } from "./desk-commands.js";
 import { LeagueDiscoveryService } from "./league-discovery-service.js";
 import { listPublicLeagues, requireLeague } from "./league-registry.js";
-import { enqueueDeskCommand } from "./desk-commands.js";
+import { fetchMarketTape } from "./market-tape.js";
 import {
   deleteMatchSession,
   listMatchSessions,
@@ -41,6 +42,7 @@ if (!config.SOURCE_API_TOKEN) throw new Error("SOURCE_API_TOKEN is required by t
 
 const metadataClient = new MatchMetadataClient(config.SOURCE_API_URL, config.SOURCE_API_TOKEN);
 const marketResolver = new MarketResolver(config.GAMMA_API_URL);
+const orderBooks = new PolymarketOrderBookClient(config.CLOB_API_URL, config.POLYGON_CHAIN_ID);
 const previewService = new PreviewService(
   metadataClient,
   marketResolver,
@@ -49,7 +51,7 @@ const previewService = new PreviewService(
 const leagueDiscoveryService = new LeagueDiscoveryService(
   metadataClient,
   marketResolver,
-  new PolymarketOrderBookClient(config.CLOB_API_URL, config.POLYGON_CHAIN_ID),
+  orderBooks,
   config.MQTT_ORIGIN,
   config.MAKER_TARGET_RETURN_RATE,
   config.MIN_EDGE,
@@ -325,18 +327,52 @@ const server = createServer(async (request, response) => {
       sendJson(response, 200, snapshot);
       return;
     }
+    if (request.method === "POST" && url.pathname === "/api/market-tape") {
+      const body = z
+        .object({
+          markets: z
+            .array(
+              z.object({
+                sourceMarketId: z.string().min(1),
+                conditionId: z.string().min(1),
+                slug: z.string().min(1),
+                tokenIds: z.tuple([z.string().min(1), z.string().min(1)]),
+                outcomes: z.tuple([z.string().min(1), z.string().min(1)]),
+                tickSize: z.number().positive(),
+                minOrderSize: z.number().positive(),
+              }),
+            )
+            .max(20),
+        })
+        .parse(await readJson(request));
+      sendJson(response, 200, await fetchMarketTape(orderBooks, dataApi, body.markets));
+      return;
+    }
     if (request.method === "GET" && url.pathname === "/api/desk") {
       sendJson(response, 200, await deskSnapshot());
       return;
     }
     if (request.method === "POST" && url.pathname === "/api/desk/command") {
       const running = await processManager.status();
-      if (!running.running) throw new Error("交易核心未运行，无法暂停或撤单");
+      if (!running.running) throw new Error("交易核心未运行，无法挂单、改价或撤单");
       const body = z
         .object({
-          action: z.enum(["pause", "resume", "cancel"]),
+          action: z.enum(["pause", "resume", "cancel", "place", "replace"]),
           sourceMarketId: z.string().min(1),
           orderIds: z.array(z.string().min(1)).optional(),
+          quotes: z
+            .array(
+              z.object({
+                outcome: z.string().min(1),
+                price: z.number().positive().lt(1),
+                size: z.number().positive(),
+              }),
+            )
+            .max(10)
+            .optional(),
+          orderId: z.string().min(1).optional(),
+          price: z.number().positive().lt(1).optional(),
+          size: z.number().positive().optional(),
         })
         .parse(await readJson(request));
       const command = await enqueueDeskCommand(body);

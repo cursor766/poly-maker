@@ -19,7 +19,7 @@ export default function DashboardPage() {
   const [status, setStatus] = useState<ControlStatus | null>(null);
   const [limits, setLimits] = useState<RuntimeLimits | null>(null);
   const [draftLimit, setDraftLimit] = useState(0);
-  const [mode, setMode] = useState<TradingMode>("shadow");
+  const [mode, setMode] = useState<TradingMode>("live");
   const [streamConnected, setStreamConnected] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -51,7 +51,8 @@ export default function DashboardPage() {
   }, [refresh]);
 
   useEffect(() => {
-    const marketIds = status?.runtime?.markets.map((market) => market.sourceMarketId).join(",") ?? "";
+    const marketIds =
+      status?.runtime?.markets.map((market) => market.sourceMarketId).join(",") ?? "";
     if (!marketIds) {
       setDesk({ markets: {} });
       return;
@@ -210,54 +211,76 @@ export default function DashboardPage() {
 
       {error && <div className={errorClass}>{error}</div>}
 
-      {runtime && (
+      {(runtime || limits) && (
         <section className="mb-5 grid gap-2.5 rounded-[18px] border border-line bg-panel p-5 sm:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded-xl border border-line bg-inset px-4 py-3.5">
-            <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">账户余额</span>
-            <strong className="mt-1.5 block font-display text-xl">${runtime.cash.toFixed(2)}</strong>
-          </div>
-          <div className="rounded-xl border border-line bg-inset px-4 py-3.5">
-            <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">活跃市场</span>
-            <strong className="mt-1.5 block font-display text-xl">{runtime.markets.length}</strong>
-          </div>
-          <div className="rounded-xl border border-line bg-inset px-4 py-3.5">
-            <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">开放订单</span>
-            <strong className="mt-1.5 block font-display text-xl">{orders}</strong>
-          </div>
-          <div className="rounded-xl border border-line bg-inset px-4 py-3.5">
-            <ExposureBar
-              used={runtime.accountNotionalUsed}
-              limit={runtime.accountNotionalLimit}
-              label="实时账户占用"
-            />
-          </div>
-          <div className="sm:col-span-2 xl:col-span-4">
-            <label className="grid max-w-md gap-2 text-xs font-medium text-mute" htmlFor="account-limit">
-              账户额度上限
-              <div className="flex gap-2">
-                <input
-                  className={inputClass}
-                  id="account-limit"
-                  type="number"
-                  min="1"
-                  value={draftLimit}
-                  onChange={(event) => setDraftLimit(Number(event.target.value))}
-                />
-                <Button disabled={busy} onClick={saveLimit} variant="secondary">
-                  热更新
-                </Button>
+          {runtime && (
+            <>
+              <div className="rounded-xl border border-line bg-inset px-4 py-3.5">
+                <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">
+                  账户余额
+                </span>
+                <strong className="mt-1.5 block font-display text-xl">
+                  ${runtime.cash.toFixed(2)}
+                </strong>
               </div>
-            </label>
-          </div>
+              <div className="rounded-xl border border-line bg-inset px-4 py-3.5">
+                <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">
+                  活跃市场
+                </span>
+                <strong className="mt-1.5 block font-display text-xl">{runtime.markets.length}</strong>
+              </div>
+              <div className="rounded-xl border border-line bg-inset px-4 py-3.5">
+                <span className="block text-[11px] uppercase tracking-[0.16em] text-mute-2">
+                  开放订单
+                </span>
+                <strong className="mt-1.5 block font-display text-xl">{orders}</strong>
+              </div>
+              <div className="rounded-xl border border-line bg-inset px-4 py-3.5">
+                <ExposureBar
+                  used={runtime.accountNotionalUsed}
+                  limit={runtime.accountNotionalLimit}
+                  label="实时账户占用"
+                />
+              </div>
+            </>
+          )}
+          {limits && (
+            <div className="sm:col-span-2 xl:col-span-4">
+              <label
+                className="grid max-w-md gap-2 text-xs font-medium text-mute"
+                htmlFor="account-limit"
+              >
+                账户额度上限
+                <div className="flex gap-2">
+                  <input
+                    className={inputClass}
+                    id="account-limit"
+                    type="number"
+                    min="0"
+                    value={draftLimit}
+                    onChange={(event) => setDraftLimit(Number(event.target.value))}
+                  />
+                  <Button disabled={busy} onClick={saveLimit} variant="secondary">
+                    热更新
+                  </Button>
+                </div>
+              </label>
+              <p className="mt-2 mb-0 text-[12px] text-mute">
+                0 表示不限制账户占用。限价买单锁定的是价格 × 股数，不是股份面额；$400
+                余额大约能挂 4 万股 1¢ 单。全场/单局单盘 ${limits.maxGameNotional}，让分/总数单盘 $
+                {limits.maxMapNotional}。单笔不超过 ${limits.maxOrderNotional}。
+              </p>
+            </div>
+          )}
         </section>
       )}
 
       {!running && (
         <section className="rounded-[18px] border border-dashed border-line bg-panel px-8 py-16 text-center">
           <span className="text-[11px] font-semibold tracking-[0.22em] text-gold">OFFLINE</span>
-          <h2 className="mt-3 mb-2 font-display text-2xl font-medium">交易核心未运行</h2>
+          <h2 className="mt-3 mb-2 font-display text-2xl font-medium">还没有挂单</h2>
           <p className="m-0 text-sm text-mute">
-            先在市场配置中启用盘口，然后从这里启动。配置修改可在运行中热生效。
+            在赛事页勾选小局或启动自动跟赔后会自动开始实盘挂单。这里只用来查看仓位、改价和锁定停止。
           </p>
         </section>
       )}
